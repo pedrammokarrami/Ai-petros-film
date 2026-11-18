@@ -1,7 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Bookmark,
   Compass,
-  Film,
+  Disc3,
   Globe2,
   Home,
   Search,
@@ -18,11 +19,16 @@ import type {
   SearchFilterState,
   TasteVector6D,
   UiSimulationState,
+  UniverseRealmFilter,
   UserAccountState,
   UserCollection,
   WatchProgressEntry
 } from './types';
-import { INITIAL_USER_STATE, PROTOTYPE_MEDIA_CATALOG } from './prototypeData';
+import {
+  filterCatalogByRealm,
+  INITIAL_USER_STATE,
+  PROTOTYPE_MEDIA_CATALOG
+} from './prototypeData';
 import {
   blendVector,
   calibrateColdStartVector,
@@ -51,44 +57,97 @@ import {
 } from './i18n';
 import type { BackendStreamQuality } from './filmDetailsClient';
 import { StateBoundary, ToastBanner, ToastMessage } from './components/UiPrimitives';
+import {
+  LivingAmbientCanvas,
+  type AmbientThemeId
+} from './components/LivingAmbientCanvas';
+import { SpatialCommandCenter } from './components/SpatialCommandCenter';
 import { EntryFlow } from './screens/EntryFlow';
 import { LivingHomeScreen } from './screens/LivingHomeScreen';
 import { DiscoveryUniverseScreen } from './screens/DiscoveryUniverseScreen';
+import { DjStudioScreen, type SonicRoomId } from './screens/DjStudioScreen';
 import { IntelligentSearchScreen } from './screens/IntelligentSearchScreen';
 import { ContentDetailModal } from './screens/ContentDetailModal';
 import { CinematicPlayerScreen } from './screens/CinematicPlayerScreen';
 import { LibraryScreen } from './screens/LibraryScreen';
 import { SettingsScreen } from './screens/SettingsScreen';
+import { djAudioController, type DjDeckConfig } from './djAudioEngine';
+import { scheduleIdleRoomAssetWarming } from '../services/roomAssetPreloader';
 
 const INITIAL_PROGRESS_SEED: Record<string, WatchProgressEntry> = {
-  'proto-01': {
-    contentId: 'proto-01',
-    positionSec: 185,
-    durationSec: 540,
+  'music-01': {
+    contentId: 'music-01',
+    positionSec: 92,
+    durationSec: 348,
     completed: false,
-    lastWatchedAt: new Date(Date.now() - 3600_000).toISOString()
+    lastWatchedAt: new Date(Date.now() - 1800_000).toISOString()
   },
-  'proto-03': {
-    contentId: 'proto-03',
-    positionSec: 210,
-    durationSec: 615,
+  'music-02': {
+    contentId: 'music-02',
+    positionSec: 140,
+    durationSec: 412,
     completed: false,
-    lastWatchedAt: new Date(Date.now() - 7200_000).toISOString()
+    lastWatchedAt: new Date(Date.now() - 2400_000).toISOString()
+  },
+  'podcast-01': {
+    contentId: 'podcast-01',
+    positionSec: 640,
+    durationSec: 2880,
+    completed: false,
+    lastWatchedAt: new Date(Date.now() - 3200_000).toISOString()
+  },
+  'book-01': {
+    contentId: 'book-01',
+    positionSec: 1120,
+    durationSec: 3420,
+    completed: false,
+    lastWatchedAt: new Date(Date.now() - 5400_000).toISOString()
   }
 };
 
 const INITIAL_COLLECTIONS_SEED: UserCollection[] = [
   {
+    id: 'col-cyber-dj-set',
+    name: 'میکس دی‌جی سایبرپانک و نئون (DJ Set)',
+    descriptionFa: 'قطعات سینث‌ویو، تکنو ملودیک و امبینت هماهنگ با BPM برای میکس دوگانه',
+    descriptionEn: 'BPM-matched synthwave, melodic techno & ambient tracks ready for dual-deck mixing',
+    itemIds: ['music-01', 'music-03', 'music-06', 'music-04', 'music-07'],
+    createdAt: new Date().toISOString(),
+    accentHex: '#F5B942',
+    moodTagFa: 'انرژی بالا · میکس دی‌جی',
+    moodTagEn: 'High Energy · DJ Mix',
+    isSmartGenerated: true
+  },
+  {
+    id: 'col-podcast-audiobook',
+    name: 'پادکست‌ها و کتاب‌های صوتی آخر شب',
+    descriptionFa: 'معماری ذهن، فلسفه صدا و روایت‌های صوتی عمیق برای تمرکز شبانه',
+    descriptionEn: 'Deep nocturnal podcasts and spatial audiobooks for late-night focus',
+    itemIds: ['podcast-01', 'book-01', 'podcast-02', 'book-03', 'podcast-04'],
+    createdAt: new Date().toISOString(),
+    accentHex: '#38BDF8',
+    moodTagFa: 'گفت‌وگو و کتاب صوتی',
+    moodTagEn: 'Podcasts & Audiobooks',
+    isSmartGenerated: false
+  },
+  {
     id: 'col-late-night',
-    name: 'شب‌های بارانی و آرام',
-    itemIds: ['proto-01', 'proto-03'],
-    createdAt: new Date().toISOString()
+    name: 'شب‌های بارانی و جَز کافه',
+    descriptionFa: 'ترکیب موسیقی جَز نوآر، لو-فای و روایت‌های آرام شبانه',
+    descriptionEn: 'Velvet nocturnal jazz, rain lo-fi, and late-night audio stories',
+    itemIds: ['music-02', 'music-05', 'book-02', 'book-04', 'podcast-04'],
+    createdAt: new Date().toISOString(),
+    accentHex: '#A855F7',
+    moodTagFa: 'خلوت شبانه',
+    moodTagEn: 'Late Night Mood',
+    isSmartGenerated: false
   }
 ];
 
 const INITIAL_SEARCH_FILTERS: SearchFilterState = {
   query: '',
   mode: 'all',
+  mediaDomain: 'all_audio',
   excludeTags: [],
   maxDurationMin: null,
   minQuality: 'all',
@@ -96,13 +155,51 @@ const INITIAL_SEARCH_FILTERS: SearchFilterState = {
   sortBy: 'relevance'
 };
 
+function mergeCatalogWithDefaults(savedCatalog?: PrototypeMediaItem[]): PrototypeMediaItem[] {
+  if (!savedCatalog || savedCatalog.length === 0) {
+    return PROTOTYPE_MEDIA_CATALOG;
+  }
+  const map = new Map<string, PrototypeMediaItem>();
+  for (const item of PROTOTYPE_MEDIA_CATALOG) {
+    map.set(item.id, item);
+  }
+  for (const saved of savedCatalog) {
+    // Strip any cinema/movie items that may have been cached in localStorage
+    if (
+      saved.mediaType === 'cinema' ||
+      saved.id.startsWith('proto-') ||
+      saved.id.startsWith('cinema-')
+    ) {
+      continue;
+    }
+    if (!map.has(saved.id)) {
+      map.set(saved.id, saved);
+    }
+  }
+  return Array.from(map.values());
+}
+
+function mergeCollectionsWithDefaults(savedCollections?: UserCollection[]): UserCollection[] {
+  if (!savedCollections || savedCollections.length === 0) {
+    return INITIAL_COLLECTIONS_SEED;
+  }
+  const existingIds = new Set(savedCollections.map((c) => c.id));
+  const merged = [...savedCollections];
+  for (const seed of INITIAL_COLLECTIONS_SEED) {
+    if (!existingIds.has(seed.id)) {
+      merged.push(seed);
+    }
+  }
+  return merged;
+}
+
 function sanitizeLoadedDownloads(
   raw?: Record<string, OfflineDownloadRecord>
 ): Record<string, OfflineDownloadRecord> {
   if (!raw) return {};
   const cleaned: Record<string, OfflineDownloadRecord> = {};
   for (const [id, rec] of Object.entries(raw)) {
-    if (rec && rec.status === 'completed') {
+    if (rec && rec.status === 'completed' && !id.startsWith('proto-')) {
       cleaned[id] = rec;
     }
   }
@@ -148,18 +245,31 @@ function UniversePrototypeShell({
 }) {
   const { t, languageInfo } = useT();
 
-  const [onboardingDone, setOnboardingDone] = useState<boolean>(
-    () => Boolean(initialVault?.onboardingDone || initialVault?.user?.ageVerified)
-  );
-  const [route, setRoute] = useState<PrototypeRoute>(() =>
-    initialVault?.onboardingDone || initialVault?.user?.ageVerified ? 'universe' : 'welcome'
-  );
+  const [onboardingDone, setOnboardingDone] = useState<boolean>(true);
+  const [route, setRoute] = useState<PrototypeRoute>('dj');
+  const [visitedDjTab, setVisitedDjTab] = useState<boolean>(true);
+  const [visitedDiscoverTab, setVisitedDiscoverTab] = useState<boolean>(false);
+  const [realmFilter, setRealmFilter] = useState<UniverseRealmFilter>('all_audio');
+  const [djStudioTab, setDjStudioTab] = useState<'dj_console' | 'playlist_studio'>('dj_console');
+  const [djDeckATrackId, setDjDeckATrackId] = useState<string>('music-01');
+  const [djDeckBTrackId, setDjDeckBTrackId] = useState<string>('music-03');
+
   const [uiState, setUiState] = useState<UiSimulationState>('normal');
   const [libraryTabRequest, setLibraryTabRequest] = useState<LibraryTab | undefined>(undefined);
   const [langPickerOpen, setLangPickerOpen] = useState(false);
 
-  const [catalog, setCatalog] = useState<PrototypeMediaItem[]>(
-    () => initialVault?.catalog ?? PROTOTYPE_MEDIA_CATALOG
+  useEffect(() => {
+    if (route === 'dj') setVisitedDjTab(true);
+    if (route === 'discover') setVisitedDiscoverTab(true);
+  }, [route]);
+
+  // Download & persistently cache all 3D models, Poly Haven textures, HDRIs, and graphics right after launch
+  useEffect(() => {
+    scheduleIdleRoomAssetWarming();
+  }, []);
+
+  const [catalog, setCatalog] = useState<PrototypeMediaItem[]>(() =>
+    mergeCatalogWithDefaults(initialVault?.catalog)
   );
   const [user, setUser] = useState<UserAccountState>(() => initialVault?.user ?? INITIAL_USER_STATE);
   const [userVector, setUserVector] = useState<TasteVector6D>(
@@ -167,22 +277,30 @@ function UniversePrototypeShell({
   );
 
   const [progressMap, setProgressMap] = useState<Record<string, WatchProgressEntry>>(
-    () => initialVault?.progressMap ?? INITIAL_PROGRESS_SEED
+    () => ({ ...INITIAL_PROGRESS_SEED, ...(initialVault?.progressMap ?? {}) })
   );
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(
-    () => new Set(initialVault?.favoriteIds ?? ['proto-01', 'proto-05'])
+    () =>
+      new Set(
+        (initialVault?.favoriteIds ?? ['music-01', 'music-02', 'podcast-01', 'book-01']).filter(
+          (id) => !id.startsWith('proto-')
+        )
+      )
   );
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(
     () => new Set(initialVault?.hiddenIds ?? [])
   );
   const [recentIds, setRecentIds] = useState<string[]>(
-    () => initialVault?.recentIds ?? ['proto-01', 'proto-03']
+    () =>
+      (initialVault?.recentIds ?? ['music-01', 'music-02', 'podcast-01', 'book-01']).filter(
+        (id) => !id.startsWith('proto-')
+      )
   );
   const [feedbackMap, setFeedbackMap] = useState<Record<string, FeedbackRecord>>(
     () => initialVault?.feedbackMap ?? {}
   );
-  const [collections, setCollections] = useState<UserCollection[]>(
-    () => initialVault?.collections ?? INITIAL_COLLECTIONS_SEED
+  const [collections, setCollections] = useState<UserCollection[]>(() =>
+    mergeCollectionsWithDefaults(initialVault?.collections)
   );
   const [downloadsMap, setDownloadsMap] = useState<Record<string, OfflineDownloadRecord>>(() =>
     sanitizeLoadedDownloads(initialVault?.downloads)
@@ -191,10 +309,15 @@ function UniversePrototypeShell({
   downloadsMapRef.current = downloadsMap;
 
   const [searchFilters, setSearchFilters] = useState<SearchFilterState>(
-    () => initialVault?.searchFilters ?? INITIAL_SEARCH_FILTERS
+    () => ({ ...INITIAL_SEARCH_FILTERS, ...(initialVault?.searchFilters ?? {}) })
   );
   const [selectedDetailItem, setSelectedDetailItem] = useState<PrototypeMediaItem | null>(null);
   const [playingItem, setPlayingItem] = useState<PrototypeMediaItem | null>(null);
+  const [miniPlayerTrack, setMiniPlayerTrack] = useState<PrototypeMediaItem | null>(
+    () => catalog[0] ?? null
+  );
+  const [miniPlayerPlaying, setMiniPlayerPlaying] = useState<boolean>(false);
+  const [activeDjRoomTheme, setActiveDjRoomTheme] = useState<SonicRoomId>('cafe');
   const [playingQualityId, setPlayingQualityId] = useState<string | undefined>(undefined);
   const [playingPlaybackMode, setPlayingPlaybackMode] = useState<'movie' | 'trailer'>('movie');
   const [previousRouteBeforeWatch, setPreviousRouteBeforeWatch] =
@@ -214,17 +337,17 @@ function UniversePrototypeShell({
       if (idbSnap.onboardingDone || idbSnap.user?.ageVerified) {
         setRoute('universe');
       }
-      setCatalog(idbSnap.catalog);
+      setCatalog(mergeCatalogWithDefaults(idbSnap.catalog));
       setUser(idbSnap.user);
       setUserVector(idbSnap.userVector);
-      setProgressMap(idbSnap.progressMap);
+      setProgressMap({ ...INITIAL_PROGRESS_SEED, ...idbSnap.progressMap });
       setFavoriteIds(new Set(idbSnap.favoriteIds));
       setHiddenIds(new Set(idbSnap.hiddenIds));
       setRecentIds(idbSnap.recentIds);
       setFeedbackMap(idbSnap.feedbackMap);
-      setCollections(idbSnap.collections);
+      setCollections(mergeCollectionsWithDefaults(idbSnap.collections));
       setDownloadsMap(sanitizeLoadedDownloads(idbSnap.downloads));
-      setSearchFilters(idbSnap.searchFilters);
+      setSearchFilters({ ...INITIAL_SEARCH_FILTERS, ...idbSnap.searchFilters });
     });
     return () => {
       active = false;
@@ -333,6 +456,8 @@ function UniversePrototypeShell({
         setPreviousRouteBeforeWatch(route);
       }
       setPlayingItem(item);
+      setMiniPlayerTrack(item);
+      setMiniPlayerPlaying(true);
       setPlayingQualityId(selectedQuality?.id);
       setPlayingPlaybackMode('movie');
       setRecentIds((prev) => [item.id, ...prev.filter((x) => x !== item.id)].slice(0, 12));
@@ -343,6 +468,31 @@ function UniversePrototypeShell({
     },
     [route, user.personalizationEnabled]
   );
+
+  const handleToggleMiniPlayer = useCallback(() => {
+    if (!miniPlayerTrack) return;
+    setMiniPlayerPlaying((prev) => {
+      const next = !prev;
+      if (next) {
+        const cfg: DjDeckConfig = {
+          track: miniPlayerTrack,
+          isPlaying: true,
+          currentTimeSec: 0,
+          pitchRate: 1,
+          volume: 0.9,
+          eqLowDb: 0,
+          eqMidDb: 0,
+          eqHighDb: 0,
+          filterSweep: 0,
+          activeLoopBeats: null
+        };
+        djAudioController.syncState(cfg, { ...cfg, isPlaying: false }, -1, 0.9, false);
+      } else {
+        djAudioController.stopAll();
+      }
+      return next;
+    });
+  }, [miniPlayerTrack]);
 
   const handleWatchTrailer = useCallback(
     (item: PrototypeMediaItem, selectedQuality?: BackendStreamQuality) => {
@@ -363,7 +513,7 @@ function UniversePrototypeShell({
     async (
       item: PrototypeMediaItem,
       saveFileToDevice = false,
-      selectedQuality?: BackendStreamQuality
+      selectedQuality?: Partial<BackendStreamQuality>
     ) => {
       const existing = downloadsMapRef.current[item.id];
       if (existing?.status === 'downloading') return;
@@ -482,27 +632,32 @@ function UniversePrototypeShell({
   );
 
   const handleToggleFavorite = useCallback(
-    (item: PrototypeMediaItem) => {
-      const wasFavorite = favoriteIds.has(item.id);
+    (itemOrId: PrototypeMediaItem | string) => {
+      const resolvedItem =
+        typeof itemOrId === 'string'
+          ? catalog.find((c) => c.id === itemOrId)
+          : itemOrId;
+      const targetId = typeof itemOrId === 'string' ? itemOrId : itemOrId.id;
+      const wasFavorite = favoriteIds.has(targetId);
       setFavoriteIds((prev) => {
         const next = new Set(prev);
         if (wasFavorite) {
-          next.delete(item.id);
+          next.delete(targetId);
         } else {
-          next.add(item.id);
+          next.add(targetId);
         }
         return next;
       });
       if (wasFavorite) {
-        showToast(t('Removed from Favorites', 'از علاقه‌مندی‌ها حذف شد'));
+        showToast(t('Removed from Archive', 'از آرشیو حذف شد'));
       } else {
-        showToast(t('Added to Favorites', 'به علاقه‌مندی‌ها اضافه شد'));
-        if (user.personalizationEnabled) {
-          setUserVector((v) => blendVector(v, item.vector, 0.16));
+        showToast(t('Saved to VIP Archive', 'در آرشیو بلیت‌های VIP ذخیره شد'));
+        if (user.personalizationEnabled && resolvedItem) {
+          setUserVector((v) => blendVector(v, resolvedItem.vector, 0.16));
         }
       }
     },
-    [favoriteIds, showToast, t, user.personalizationEnabled]
+    [catalog, favoriteIds, showToast, t, user.personalizationEnabled]
   );
 
   const handleFeedback = useCallback(
@@ -572,7 +727,7 @@ function UniversePrototypeShell({
   );
 
   const handleSaveProgress = useCallback(
-    (contentId: string, positionSec: number, durationSec: number, completed: boolean) => {
+    (contentId: string, positionSec: number, durationSec: number, completed = false) => {
       setProgressMap((prev) => ({
         ...prev,
         [contentId]: {
@@ -594,6 +749,83 @@ function UniversePrototypeShell({
     },
     [user.personalizationEnabled]
   );
+
+  const handleOpenInDj = useCallback(
+    (item?: PrototypeMediaItem, studioTab: any = 'dj_console') => {
+      if (item) {
+        if (item.id === djDeckATrackId) {
+          // already on Deck A
+        } else if (item.id === djDeckBTrackId) {
+          // already on Deck B
+        } else {
+          setDjDeckATrackId(item.id);
+        }
+        setRecentIds((prev) => [item.id, ...prev.filter((x) => x !== item.id)].slice(0, 12));
+      }
+      setDjStudioTab(studioTab === 'playlist_studio' ? 'playlist_studio' : 'dj_console');
+      setRoute('dj');
+    },
+    [djDeckATrackId, djDeckBTrackId]
+  );
+
+  const handleCreatePlaylist = useCallback(
+    (
+      name: string,
+      itemIds: string[] = [],
+      meta?: {
+        descriptionFa?: string;
+        descriptionEn?: string;
+        accentHex?: string;
+        moodTagFa?: string;
+        moodTagEn?: string;
+        isSmartGenerated?: boolean;
+      }
+    ) => {
+      const newCol: UserCollection = {
+        id: `col-${Date.now()}`,
+        name,
+        itemIds,
+        createdAt: new Date().toISOString(),
+        descriptionFa: meta?.descriptionFa,
+        descriptionEn: meta?.descriptionEn,
+        accentHex: meta?.accentHex ?? '#F5B942',
+        moodTagFa: meta?.moodTagFa,
+        moodTagEn: meta?.moodTagEn,
+        isSmartGenerated: meta?.isSmartGenerated
+      };
+      setCollections((prev) => [newCol, ...prev]);
+      showToast(
+        `${t('Playlist saved', 'پلی‌لیست ذخیره شد')}: ${name} (${itemIds.length} ${t('tracks', 'اثر')})`,
+        t('Open Library', 'مشاهده کتابخانه'),
+        () => {
+          setLibraryTabRequest('collections');
+          setRoute('library');
+        }
+      );
+    },
+    [showToast, t]
+  );
+
+  const handleReorderPlaylistItems = useCallback((colId: string, nextItemIds: string[]) => {
+    setCollections((prev) =>
+      prev.map((c) => (c.id === colId ? { ...c, itemIds: nextItemIds } : c))
+    );
+  }, []);
+
+  const handleToggleCollectionItem = useCallback((colId: string, contentId: string) => {
+    setCollections((prev) =>
+      prev.map((c) => {
+        if (c.id !== colId) return c;
+        const exists = c.itemIds.includes(contentId);
+        return {
+          ...c,
+          itemIds: exists
+            ? c.itemIds.filter((x) => x !== contentId)
+            : [...c.itemIds, contentId]
+        };
+      })
+    );
+  }, []);
 
   const handleExportPersonalData = useCallback(() => {
     const payload = {
@@ -628,17 +860,22 @@ function UniversePrototypeShell({
     setUser(INITIAL_USER_STATE);
     setUserVector(DEFAULT_TASTE_VECTOR);
     setProgressMap(INITIAL_PROGRESS_SEED);
-    setFavoriteIds(new Set(['proto-01', 'proto-05']));
+      setFavoriteIds(new Set(['music-01', 'music-02', 'podcast-01', 'book-01']));
     setHiddenIds(new Set());
-    setRecentIds(['proto-01', 'proto-03']);
+    setRecentIds(['music-01', 'music-02', 'podcast-01', 'book-01']);
     setFeedbackMap({});
     setCollections(INITIAL_COLLECTIONS_SEED);
     setDownloadsMap({});
     setSearchFilters(INITIAL_SEARCH_FILTERS);
     setUiState('normal');
-    setOnboardingDone(false);
+    setOnboardingDone(true);
     showToast(t('In-app memory wiped and reset cleanly.', 'حافظه داخل اپلیکیشن پاک‌سازی و بازنشانی شد.'));
   }, [showToast, t]);
+
+  const realmFilteredCatalog = useMemo(() => {
+    const filtered = filterCatalogByRealm(catalog, realmFilter);
+    return filtered.length > 0 ? filtered : catalog;
+  }, [catalog, realmFilter]);
 
   const effectiveNavItems: Array<{
     id: PrototypeRoute;
@@ -647,11 +884,11 @@ function UniversePrototypeShell({
     icon: React.ReactNode;
   }> = useMemo(
     () => [
-      { id: 'universe', fa: 'جهان من', en: 'My Universe', icon: <Home className="h-4 w-4" /> },
-      { id: 'discover', fa: 'کاوش سه‌بعدی', en: 'Discover Map', icon: <Compass className="h-4 w-4" /> },
-      { id: 'search', fa: 'جست‌وجو', en: 'Search', icon: <Search className="h-4 w-4" /> },
-      { id: 'library', fa: 'کتابخانه', en: 'Library', icon: <Film className="h-4 w-4" /> },
-      { id: 'settings', fa: 'تنظیمات', en: 'Settings', icon: <Settings className="h-4 w-4" /> }
+      { id: 'universe', fa: 'صفحه اصلی', en: 'Home', icon: <Home className="h-[18px] w-[18px]" /> },
+      { id: 'dj', fa: 'اتاق‌ها', en: 'Rooms', icon: <Disc3 className="h-[18px] w-[18px]" /> },
+      { id: 'discover', fa: 'کاوش بی‌نهایت', en: 'Discover', icon: <Compass className="h-[19px] w-[19px]" /> },
+      { id: 'search', fa: 'سرچ هوشمند', en: 'Search', icon: <Search className="h-[18px] w-[18px]" /> },
+      { id: 'library', fa: 'کتابخانه', en: 'Library', icon: <Bookmark className="h-[18px] w-[18px]" /> }
     ],
     []
   );
@@ -693,68 +930,70 @@ function UniversePrototypeShell({
     );
   }
 
+  const activeAmbientTheme: AmbientThemeId =
+    route === 'dj'
+      ? activeDjRoomTheme
+      : route === 'discover' ||
+          route === 'search' ||
+          route === 'library' ||
+          route === 'settings'
+        ? route
+        : 'universe';
+
+  const showSpatialMiniPlayer =
+    Boolean(miniPlayerTrack) && route !== 'watch' && route !== 'discover' && route !== 'dj';
+
   return (
     <MotionConfig reducedMotion={user.reducedMotion ? 'always' : 'user'}>
       <div
-        className={`min-h-[100dvh] bg-[#06070C] text-[#F5F7FA] flex flex-col ${
+        className={`relative min-h-[100dvh] bg-[#05060B] text-[#F5F7FA] flex flex-col ${
           user.highContrast ? 'contrast-125' : ''
         } ${user.reducedMotion ? 'reduced-motion-mode' : ''}`}
       >
-        {/* Top Clean 3-Zone Header */}
-        <header className="sticky top-0 z-40 border-b border-white/10 bg-[#06070C]/90 backdrop-blur-xl">
-          <div className="mx-auto max-w-7xl px-3 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2 sm:gap-4">
-            {/* Zone 1: Brand */}
+        {/* Dynamic Organic Living Ambient Light Canvas & Audio-Reactive Particles */}
+        <LivingAmbientCanvas themeId={activeAmbientTheme} reducedMotion={user.reducedMotion} />
+
+        {/* Airy Floating Transparent Header (Zero hard bottom border) */}
+        <motion.header
+          initial={{ opacity: 0, y: -16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ type: 'spring', stiffness: 320, damping: 26 }}
+          className="pointer-events-none sticky top-0 z-40"
+        >
+          <div className="mx-auto max-w-7xl px-3 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-4">
+            {/* Floating Brand Capsule */}
             <button
               type="button"
-              onClick={() => navigateTo('universe')}
-              className="min-h-[44px] flex items-center gap-2.5 text-start cursor-pointer shrink-0"
+              onClick={() => navigateTo('dj')}
+              className="pointer-events-auto min-h-[38px] inline-flex items-center gap-2.5 rounded-full liquid-glass-capsule px-4 text-start cursor-pointer shrink-0"
             >
-              <span className="font-editorial text-lg sm:text-xl tracking-[0.16em] text-[#F5B942]">
-                AETHER
+              <span className="font-editorial text-sm sm:text-base tracking-[0.12em] text-[#F5B942]">
+                aipetros-sound
               </span>
-              <span className="hidden xl:inline text-[11px] font-medium text-[#A3AEC2]">
-                {t('Personal Entertainment Universe', 'جهان سرگرمی شخصی')}
+              <span className="hidden lg:inline text-[11px] font-medium text-[#CBD5E1]/80">
+                {t('Listen · Create · Explore', 'بشنو · بساز · کاوش کن')}
               </span>
             </button>
 
-            {/* Zone 2: Desktop Single-Line Primary Links with Sliding Indicator */}
-            <nav className="hidden md:flex items-center gap-1" aria-label="Primary navigation">
-              {effectiveNavItems.map((nav) => {
-                const active = route === nav.id;
-                return (
-                  <button
-                    key={nav.id}
-                    type="button"
-                    onClick={() => navigateTo(nav.id)}
-                    className={`relative min-h-[40px] inline-flex items-center gap-1.5 rounded-full px-3.5 text-xs font-medium whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                      active
-                        ? 'text-[#06070C] font-semibold'
-                        : 'text-[#A3AEC2] hover:text-[#F5F7FA] hover:bg-white/[0.06]'
-                    }`}
-                  >
-                    {active && (
-                      <motion.span
-                        layoutId="desktopNavPill"
-                        transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                        className="absolute inset-0 rounded-full bg-[#F5B942]"
-                      />
-                    )}
-                    <span className="relative z-10 inline-flex items-center gap-1.5">
-                      {nav.icon}
-                      <span>{t(nav.en, nav.fa)}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </nav>
-
-            {/* Zone 3: Global World Language Picker */}
-            <div className="flex items-center gap-2 shrink-0">
+            {/* Floating Language & Settings Glass Controls */}
+            <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => navigateTo('settings')}
+                aria-label={t('Settings', 'تنظیمات')}
+                className={`min-h-[38px] min-w-[38px] inline-flex items-center justify-center rounded-full transition-all cursor-pointer ${
+                  route === 'settings'
+                    ? 'liquid-glass-cta-gold'
+                    : 'liquid-glass-capsule text-[#CBD5E1] hover:text-[#F5F7FA]'
+                }`}
+              >
+                <Settings className="h-4 w-4" />
+              </button>
               <button
                 type="button"
                 onClick={() => setLangPickerOpen(true)}
                 aria-label={t('Select World Language', 'انتخاب زبان اپلیکیشن')}
-                className="min-h-[40px] inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-[#0D101A] px-3 text-xs font-medium text-[#F5F7FA] hover:border-[#F5B942]/55 cursor-pointer whitespace-nowrap"
+                className="min-h-[38px] inline-flex items-center gap-1.5 rounded-full liquid-glass-capsule px-3 text-xs font-medium text-[#F5F7FA] hover:border-[#F5B942]/55 cursor-pointer whitespace-nowrap"
               >
                 <Globe2 className="h-3.5 w-3.5 text-[#F5B942]" />
                 <span className="hidden sm:inline">{languageInfo.nativeName}</span>
@@ -762,101 +1001,152 @@ function UniversePrototypeShell({
               </button>
             </div>
           </div>
-        </header>
+        </motion.header>
 
         {/* Main Content Container */}
-        <main className="flex-1 mx-auto w-full max-w-7xl px-3 sm:px-6 lg:px-8 pt-5 sm:pt-6 pb-[calc(5.25rem+env(safe-area-inset-bottom))] md:pb-12">
+        <main
+          className={
+            route === 'discover'
+              ? 'relative z-10 flex-1 mx-auto w-full max-w-7xl px-3 sm:px-6 lg:px-8 pt-0 sm:pt-3 pb-2'
+              : `relative z-10 flex-1 mx-auto w-full max-w-7xl px-3 sm:px-6 lg:px-8 pt-4 sm:pt-5 ${
+                  showSpatialMiniPlayer
+                    ? 'pb-[calc(9.5rem+env(safe-area-inset-bottom))]'
+                    : 'pb-[calc(6rem+env(safe-area-inset-bottom))]'
+                }`
+          }
+        >
           <StateBoundary
-            uiState={uiState}
+            state={uiState}
             lang={lang}
-            onRetry={() => setUiState('normal')}
-            onResetFilters={() => {
+            onResetState={() => {
               setSearchFilters(INITIAL_SEARCH_FILTERS);
               setUiState('normal');
             }}
-            onOpenDownloads={() => {
-              setUiState('normal');
-              setLibraryTabRequest('downloads');
-              setRoute('library');
-            }}
           >
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={route}
-                initial={route === 'watch' ? { opacity: 0 } : { opacity: 0, y: 10 }}
-                animate={route === 'watch' ? { opacity: 1 } : { opacity: 1, y: 0 }}
-                exit={route === 'watch' ? { opacity: 0 } : { opacity: 0, y: -8 }}
-                transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              >
-                {route === 'universe' && (
-                  <LivingHomeScreen
-                    catalog={catalog}
-                    lang={lang}
-                    userVector={userVector}
-                    personalizationEnabled={user.personalizationEnabled}
-                    progressMap={progressMap}
-                    favoriteIds={favoriteIds}
-                    downloadsMap={downloadsMap}
-                    hiddenIds={hiddenIds}
-                    blockedTopics={user.blockedTopics}
-                    feedbackMap={feedbackMap}
-                    collections={collections}
-                    onNavigate={navigateTo}
-                    onOpenDetail={handleOpenDetail}
-                    onPlay={handlePlayItem}
-                    onWatchTrailer={(item) => handleWatchTrailer(item)}
-                    onDownload={(item) => void handleDownloadItem(item, false)}
-                    onToggleFavorite={handleToggleFavorite}
-                    onFeedback={handleFeedback}
-                    onHide={handleHideItem}
-                    onEnablePersonalization={() =>
-                      handleUpdateUser({ personalizationEnabled: true, consentPersonalization: true })
-                    }
-                  />
-                )}
+            {/* Persistent Cached Heavy 3D Workspaces (Paused when hidden, 0ms instant switch) */}
+            {visitedDjTab && (
+              <div className={route === 'dj' ? '' : 'hidden'}>
+                <DjStudioScreen
+                  catalog={catalog}
+                  lang={lang}
+                  userVector={userVector}
+                  favoriteIds={favoriteIds}
+                  downloadsMap={downloadsMap}
+                  collections={collections}
+                  initialDeckATrackId={djDeckATrackId}
+                  initialDeckBTrackId={djDeckBTrackId}
+                  initialStudioTab={djStudioTab}
+                  isHostVisible={route === 'dj'}
+                  onRoomThemeChange={setActiveDjRoomTheme}
+                  onActivePlaybackChange={(track, playing) => {
+                    setMiniPlayerTrack(track);
+                    setMiniPlayerPlaying(playing);
+                  }}
+                  onPlayTrack={handlePlayItem}
+                  onOpenDetail={handleOpenDetail}
+                  onDownloadTrack={(item) => void handleDownloadItem(item, false)}
+                  onToggleFavorite={handleToggleFavorite}
+                  onCreatePlaylist={(playlist) =>
+                    handleCreatePlaylist(playlist.name, playlist.itemIds, {
+                      descriptionFa: playlist.descriptionFa,
+                      descriptionEn: playlist.descriptionEn,
+                      accentHex: playlist.accentHex,
+                      moodTagFa: playlist.moodTagFa,
+                      moodTagEn: playlist.moodTagEn,
+                      isSmartGenerated: true
+                    })
+                  }
+                  onUpdatePlaylist={(playlistId, patch) => {
+                    setCollections((prev) =>
+                      prev.map((c) => (c.id === playlistId ? { ...c, ...patch } : c))
+                    );
+                  }}
+                  onDeletePlaylist={(id) => {
+                    setCollections((prev) => prev.filter((c) => c.id !== id));
+                    showToast(t('Playlist deleted.', 'پلی‌لیست حذف شد.'));
+                  }}
+                />
+              </div>
+            )}
 
-                {route === 'discover' && (
-                  <DiscoveryUniverseScreen
-                    catalog={catalog}
-                    lang={lang}
-                    userVector={userVector}
-                    personalizationEnabled={user.personalizationEnabled}
-                    liteMode={user.liteUniverseMode}
-                    reducedMotion={user.reducedMotion}
-                    favoriteIds={favoriteIds}
-                    downloadsMap={downloadsMap}
-                    hiddenIds={hiddenIds}
-                    blockedTopics={user.blockedTopics}
-                    progressMap={progressMap}
-                    feedbackMap={feedbackMap}
-                    onToggleLiteMode={(lite) => handleUpdateUser({ liteUniverseMode: lite })}
-                    onOpenDetail={handleOpenDetail}
-                    onPlay={handlePlayItem}
-                    onDownload={(item) => void handleDownloadItem(item, false)}
-                    onToggleFavorite={handleToggleFavorite}
-                    onFeedback={handleFeedback}
-                    onHide={handleHideItem}
-                  />
-                )}
+            {visitedDiscoverTab && (
+              <div className={route === 'discover' ? '' : 'hidden'}>
+                <DiscoveryUniverseScreen
+                  catalog={catalog}
+                  lang={lang}
+                  userVector={userVector}
+                  personalizationEnabled={user.personalizationEnabled}
+                  liteMode={user.liteUniverseMode}
+                  favoriteIds={favoriteIds}
+                  downloadsMap={downloadsMap}
+                  hiddenIds={hiddenIds}
+                  progressMap={progressMap}
+                  feedbackMap={feedbackMap}
+                  isHostVisible={route === 'discover'}
+                  onToggleLiteMode={(lite) => handleUpdateUser({ liteUniverseMode: lite })}
+                  onOpenDetail={handleOpenDetail}
+                  onPlay={handlePlayItem}
+                  onActivePlaybackChange={(track, playing) => {
+                    setMiniPlayerTrack(track);
+                    setMiniPlayerPlaying(playing);
+                  }}
+                  onDownload={(item, saveFile) => void handleDownloadItem(item, saveFile)}
+                  onToggleFavorite={handleToggleFavorite}
+                  onFeedback={handleFeedback}
+                  onHide={handleHideItem}
+                />
+              </div>
+            )}
 
-                {route === 'search' && (
+            {route !== 'dj' && route !== 'discover' && (
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={route}
+                  initial={route === 'watch' ? { opacity: 0 } : { opacity: 0, y: 10 }}
+                  animate={route === 'watch' ? { opacity: 1 } : { opacity: 1, y: 0 }}
+                  exit={route === 'watch' ? { opacity: 0 } : { opacity: 0, y: -8 }}
+                  transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  {route === 'universe' && (
+                    <LivingHomeScreen
+                      catalog={catalog}
+                      lang={lang}
+                      userVector={userVector}
+                      personalizationEnabled={user.personalizationEnabled}
+                      progressMap={progressMap}
+                      favoriteIds={favoriteIds}
+                      downloadsMap={downloadsMap}
+                      hiddenIds={hiddenIds}
+                      feedbackMap={feedbackMap}
+                      onGoDiscover={() => navigateTo('discover')}
+                      onOpenDetail={handleOpenDetail}
+                      onPlay={handlePlayItem}
+                      onWatchTrailer={(item) => handleWatchTrailer(item)}
+                      onDownload={(item, saveFile) => void handleDownloadItem(item, saveFile)}
+                      onToggleFavorite={handleToggleFavorite}
+                      onFeedback={handleFeedback}
+                      onHide={handleHideItem}
+                      onOpenInDj={(item, tab) => handleOpenInDj(item, tab ?? 'dj_console')}
+                    />
+                  )}
+
+                  {route === 'search' && (
                   <IntelligentSearchScreen
                     catalog={catalog}
                     lang={lang}
                     userVector={userVector}
-                    personalizationEnabled={user.personalizationEnabled}
+                    recentSearches={[]}
                     progressMap={progressMap}
                     favoriteIds={favoriteIds}
                     downloadsMap={downloadsMap}
                     hiddenIds={hiddenIds}
-                    blockedTopics={user.blockedTopics}
                     feedbackMap={feedbackMap}
-                    filters={searchFilters}
-                    onChangeFilters={setSearchFilters}
-                    onPersonalizeTaste={handlePersonalizeTasteFromSearch}
+                    onAddRecentSearch={() => {}}
+                    onClearRecentSearches={() => {}}
                     onOpenDetail={handleOpenDetail}
                     onPlay={handlePlayItem}
-                    onDownload={(item) => void handleDownloadItem(item, false)}
+                    onWatchTrailer={(item) => handleWatchTrailer(item)}
+                    onDownload={(item, saveFile) => void handleDownloadItem(item, saveFile)}
                     onToggleFavorite={handleToggleFavorite}
                     onFeedback={handleFeedback}
                     onHide={handleHideItem}
@@ -866,20 +1156,26 @@ function UniversePrototypeShell({
                 {route === 'watch' && (
                   <CinematicPlayerScreen
                     item={playingItem || catalog[0]}
+                    catalog={catalog}
                     lang={lang}
-                    initialProgress={progressMap[(playingItem || catalog[0]).id]}
+                    playbackMode={playingPlaybackMode}
+                    progress={progressMap[(playingItem || catalog[0]).id]}
+                    isFavorite={favoriteIds.has((playingItem || catalog[0]).id)}
+                    isDownloaded={Boolean(downloadsMap[(playingItem || catalog[0]).id])}
                     downloadRecord={downloadsMap[(playingItem || catalog[0]).id]}
-                    defaultQuality={user.preferredQuality}
+                    preferredQuality={user.preferredQuality}
                     defaultSubtitleLang={user.defaultSubtitleLang}
                     defaultSpeed={user.defaultSpeed}
-                    initialSelectedQualityId={playingQualityId}
-                    initialPlaybackMode={playingPlaybackMode}
-                    onSaveProgress={handleSaveProgress}
-                    onDownload={(item, saveFile, quality) =>
+                    reducedMotion={user.reducedMotion}
+                    onUpdateProgress={handleSaveProgress}
+                    onSelectItem={handlePlayItem}
+                    onDownloadItem={(item, saveFile, quality) =>
                       void handleDownloadItem(item, saveFile, quality)
                     }
+                    onToggleFavorite={handleToggleFavorite}
                     onOpenLanguagePicker={() => setLangPickerOpen(true)}
-                    onBack={() => navigateTo(previousRouteBeforeWatch)}
+                    onBackToBrowse={() => navigateTo(previousRouteBeforeWatch)}
+                    onOpenInDj={(item, tab) => handleOpenInDj(item, tab ?? 'dj_console')}
                   />
                 )}
 
@@ -887,21 +1183,20 @@ function UniversePrototypeShell({
                   <LibraryScreen
                     catalog={catalog}
                     lang={lang}
-                    userVector={userVector}
-                    personalizationEnabled={user.personalizationEnabled}
                     progressMap={progressMap}
                     favoriteIds={favoriteIds}
                     downloadsMap={downloadsMap}
                     hiddenIds={hiddenIds}
-                    recentIds={recentIds}
                     feedbackMap={feedbackMap}
                     collections={collections}
-                    initialTab={libraryTabRequest}
                     onOpenDetail={handleOpenDetail}
                     onPlay={handlePlayItem}
                     onDownload={(item, saveFile) => void handleDownloadItem(item, saveFile)}
-                    onSaveDownloadToDevice={(item) => void handleSaveDownloadToDevice(item)}
-                    onDeleteDownload={handleDeleteDownload}
+                    onRemoveDownload={handleDeleteDownload}
+                    onClearAllDownloads={() => {
+                      setDownloadsMap({});
+                      showToast(t('Offline files cleared.', 'فایل‌های آفلاین پاک شدند.'));
+                    }}
                     onToggleFavorite={handleToggleFavorite}
                     onFeedback={handleFeedback}
                     onHide={handleHideItem}
@@ -913,11 +1208,7 @@ function UniversePrototypeShell({
                       })
                     }
                     onCreateCollection={(name) => {
-                      setCollections((prev) => [
-                        { id: `col-${Date.now()}`, name, itemIds: [], createdAt: new Date().toISOString() },
-                        ...prev
-                      ]);
-                      showToast(t('Collection created.', 'کلکسیون جدید ایجاد شد.'));
+                      handleCreatePlaylist(name, []);
                     }}
                     onDeleteCollection={(id) => {
                       setCollections((prev) => prev.filter((c) => c.id !== id));
@@ -926,15 +1217,19 @@ function UniversePrototypeShell({
                     onRemoveFromCollection={(colId, contentId) => {
                       setCollections((prev) =>
                         prev.map((c) =>
-                          c.id === colId ? { ...c, itemIds: c.itemIds.filter((x) => x !== contentId) } : c
+                          c.id === colId
+                            ? { ...c, itemIds: c.itemIds.filter((x) => x !== contentId) }
+                            : c
                         )
                       );
                     }}
                     onClearHistory={() => {
                       setProgressMap({});
                       setRecentIds([]);
-                      showToast(t('Watch history cleared.', 'تاریخچه تماشا پاک شد.'));
+                      showToast(t('Playback history cleared.', 'تاریخچه پخش پاک شد.'));
                     }}
+                    onOpenInDj={(item, tab) => handleOpenInDj(item, tab ?? 'dj_console')}
+                    onOpenPlaylistStudio={() => handleOpenInDj(undefined, 'playlist_studio')}
                   />
                 )}
 
@@ -947,6 +1242,9 @@ function UniversePrototypeShell({
                     onChangeLang={setLang}
                     onOpenLanguagePicker={() => setLangPickerOpen(true)}
                     onUpdateUser={handleUpdateUser}
+                    onUpdateTasteVector={(patch) =>
+                      setUserVector((prev) => ({ ...prev, ...patch }))
+                    }
                     onRevokeSession={(sessionId) => {
                       setUser((prev) => ({
                         ...prev,
@@ -958,24 +1256,47 @@ function UniversePrototypeShell({
                       setUserVector(DEFAULT_TASTE_VECTOR);
                       setFeedbackMap({});
                       setProgressMap({});
-                      showToast(t('Taste model and history reset.', 'مدل سلیقه و سابقه تعاملات بازنشانی شد.'));
+                      showToast(
+                        t(
+                          'Taste model and history reset.',
+                          'مدل سلیقه و سابقه تعاملات بازنشانی شد.'
+                        )
+                      );
                     }}
                     onExportPersonalData={handleExportPersonalData}
                     onWipeLocalMemory={() => {
                       handleResetPrototype();
-                      navigateTo('welcome');
+                      navigateTo('universe');
                     }}
                   />
                 )}
               </motion.div>
             </AnimatePresence>
+            )}
           </StateBoundary>
         </main>
 
-        {/* Mobile Compact Bottom Dock with Safe Area Inset & Sliding Pill */}
-        <nav
-          className="md:hidden fixed bottom-0 inset-x-0 z-40 h-[calc(4rem+env(safe-area-inset-bottom))] pb-[env(safe-area-inset-bottom)] border-t border-white/12 bg-[#06070C]/95 backdrop-blur-xl px-1.5 flex items-center justify-around"
-          aria-label="Mobile Navigation"
+        {/* Hovering Liquid-Glass Spatial Mini-Player Capsule */}
+        <AnimatePresence>
+          {showSpatialMiniPlayer && miniPlayerTrack && (
+            <SpatialCommandCenter
+              item={miniPlayerTrack}
+              isPlaying={miniPlayerPlaying}
+              lang={lang}
+              accentHex={miniPlayerTrack.accentHex || '#F5B942'}
+              onTogglePlay={handleToggleMiniPlayer}
+              onOpenFullPlayer={() => handlePlayItem(miniPlayerTrack)}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* Ultra-Thin Translucent Holographic Glass Bottom Navigation Dock */}
+        <motion.nav
+          initial={{ opacity: 0, y: 24, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ type: 'spring', stiffness: 320, damping: 26, delay: 0.12 }}
+          className="fixed bottom-[calc(0.6rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-40 w-[min(420px,calc(100vw-18px))] h-[56px] rounded-full liquid-glass-capsule px-1.5 flex items-center justify-around"
+          aria-label="Primary Bottom Navigation"
         >
           {effectiveNavItems.map((nav) => {
             const active = route === nav.id;
@@ -984,25 +1305,45 @@ function UniversePrototypeShell({
                 key={nav.id}
                 type="button"
                 onClick={() => navigateTo(nav.id)}
-                className={`relative min-h-[44px] min-w-[48px] flex flex-col items-center justify-center gap-0.5 rounded-xl px-2 text-[10px] font-medium cursor-pointer transition-colors ${
-                  active ? 'text-[#F5B942]' : 'text-[#A3AEC2]'
+                className={`relative h-[48px] flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 text-[9.5px] font-medium cursor-pointer transition-colors ${
+                  active ? 'text-[#F8FAFC] font-bold' : 'text-[#CBD5E1]/70 hover:text-white'
                 }`}
               >
                 {active && (
                   <motion.span
-                    layoutId="mobileDockPill"
-                    transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                    className="absolute inset-x-1 top-1 bottom-1 rounded-xl bg-[#F5B942]/12 border border-[#F5B942]/30"
+                    layoutId="holoNavGlassDome"
+                    transition={{ type: 'spring', stiffness: 420, damping: 28 }}
+                    className="pointer-events-none absolute -top-2.5 h-[62px] w-[76px] rounded-full bg-[radial-gradient(circle_at_50%_26%,rgba(245,185,66,0.34)_0%,rgba(45,32,16,0.68)_58%,rgba(14,16,24,0.75)_100%)] border border-[#F5B942]/30 shadow-[0_10px_28px_rgba(0,0,0,0.6),0_0_24px_rgba(245,185,66,0.22),inset_0_1px_1px_rgba(255,255,255,0.28)]"
                   />
                 )}
-                <span className="relative z-10 flex flex-col items-center gap-0.5">
-                  {nav.icon}
-                  <span className="truncate max-w-[60px]">{t(nav.en, nav.fa)}</span>
+                <span className={`relative z-10 flex flex-col items-center gap-0.5 ${active ? '-mt-0.5' : ''}`}>
+                  <motion.span
+                    animate={active ? { scale: 1.12 } : { scale: 1 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 24 }}
+                    className={
+                      active
+                        ? 'text-[#F5B942] drop-shadow-[0_0_8px_rgba(245,185,66,0.75)]'
+                        : ''
+                    }
+                  >
+                    {nav.icon}
+                  </motion.span>
+                  <span className="whitespace-nowrap leading-tight tracking-tight">
+                    {t(nav.en, nav.fa)}
+                  </span>
+                  {active && (
+                    /* Micro-particle light dots below active icon */
+                    <span className="mt-0.5 flex items-center gap-1">
+                      <span className="h-[2.5px] w-[2.5px] rounded-full bg-[#F5B942]/70" />
+                      <span className="h-[3.5px] w-[3.5px] rounded-full bg-[#F5B942] shadow-[0_0_8px_#F5B942]" />
+                      <span className="h-[2.5px] w-[2.5px] rounded-full bg-[#F5B942]/70" />
+                    </span>
+                  )}
                 </span>
               </button>
             );
           })}
-        </nav>
+        </motion.nav>
 
         {/* Content Detail Modal / Bottom Sheet */}
         <ContentDetailModal

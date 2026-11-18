@@ -28,10 +28,19 @@ const SYNONYM_MAP: Record<string, string[]> = {
   animation: ['animation', 'انیمیشن', 'anime'],
   آرام: ['slow-burn', 'calm', 'آرام', 'آهسته', 'ambient', 'ملایم', 'asmr'],
   slow: ['slow-burn', 'آهسته', 'آرام', 'calm'],
-  سورئال: ['surreal', 'سورئال', 'dream', 'رؤیا', 'ai-art'],
+  سورئال: ['surreal', 'سورئال', 'dream', 'رؤیا', 'ai-art', 'هزارتو'],
   surreal: ['surreal', 'سورئال', 'dream', 'abstract'],
-  موسیقی: ['music', 'موسیقی', 'sonata', 'سونات', 'binaural', 'asmr', 'صدا'],
-  music: ['music', 'موسیقی', 'sonata', 'binaural'],
+  موسیقی: ['music', 'موسیقی', 'sonata', 'سونات', 'binaural', 'asmr', 'صدا', 'سینت‌ویو', 'جاز', 'تکنو'],
+  music: ['music', 'موسیقی', 'sonata', 'binaural', 'synthwave', 'jazz', 'techno'],
+  پادکست: ['podcast', 'پادکست', 'گفتگو', 'اپیزود', 'رادیو', 'تحلیلی', 'داستانی'],
+  podcast: ['podcast', 'پادکست', 'episode', 'radio', 'deep-talk'],
+  کتاب: ['audiobook', 'کتاب صوتی', 'کتاب', 'رمان', 'داستان', 'literature', 'book'],
+  'کتاب صوتی': ['audiobook', 'کتاب صوتی', 'کتاب', 'رمان', 'book'],
+  audiobook: ['audiobook', 'کتاب صوتی', 'کتاب', 'book', 'literature'],
+  دی‌جی: ['dj', 'دی‌جی', 'میکس', 'کلاب', 'club', 'techno', 'house', 'synthwave'],
+  dj: ['dj', 'دی‌جی', 'club', 'techno', 'house', 'synthwave', 'dj-ready'],
+  جاز: ['jazz', 'جاز', 'ساکسیفون', 'saxophone', 'پاریس'],
+  jazz: ['jazz', 'جاز', 'saxophone'],
   تنش: ['tension', 'تنش', 'paranoia', 'mystery', 'معمایی'],
   tension: ['tension', 'تنش', 'mystery', 'paranoia'],
   صمیمی: ['intimate', 'صمیمی', 'hotel', 'velvet', 'مخملی', 'حسی'],
@@ -365,6 +374,22 @@ export function runIntelligentSearch(params: {
   });
 
   const filtered = uniqueCatalog.filter((item) => {
+    if (filters.mediaDomain && filters.mediaDomain !== 'all') {
+      const domain =
+        item.mediaType ||
+        (item.id.startsWith('music-')
+          ? 'music'
+          : item.id.startsWith('podcast-')
+          ? 'podcast'
+          : item.id.startsWith('book-')
+          ? 'audiobook'
+          : 'cinema');
+      if (filters.mediaDomain === 'all_audio') {
+        if (domain !== 'music' && domain !== 'podcast' && domain !== 'audiobook') return false;
+      } else if (domain !== filters.mediaDomain) {
+        return false;
+      }
+    }
     if (filters.maxDurationMin !== null && item.durationSec > filters.maxDurationMin * 60) {
       return false;
     }
@@ -391,6 +416,10 @@ export function runIntelligentSearch(params: {
       item.synopsisEn,
       item.creatorFa || '',
       item.creatorEn || '',
+      item.narratorFa || '',
+      item.narratorEn || '',
+      item.musicalKey || '',
+      item.bpm ? `${item.bpm} bpm` : '',
       ...item.tags,
       ...item.tagsFa
     ]
@@ -481,3 +510,68 @@ export function runIntelligentSearch(params: {
     suggestedRelaxationsEn
   };
 }
+
+export function computeMatchScore(
+  arg1: PrototypeMediaItem | TasteVector6D,
+  arg2: PrototypeMediaItem | TasteVector6D,
+  feedbackMap?: Record<string, unknown>
+): number {
+  const item = ('id' in arg1 ? arg1 : arg2) as PrototypeMediaItem;
+  const userVector = ('id' in arg1 ? arg2 : arg1) as TasteVector6D;
+  const targetVec = item?.vector ?? userVector;
+  let sim = cosineSimilarity6D(userVector, targetVec);
+  const fb = feedbackMap?.[item.id] as { sentiment?: string } | string | undefined;
+  const sentiment = typeof fb === 'string' ? fb : fb?.sentiment;
+  if (sentiment === 'like' || sentiment === 'more') sim += 0.1;
+  if (sentiment === 'dislike' || sentiment === 'less' || sentiment === 'less_like_this') sim -= 0.35;
+  return Math.max(62, Math.min(99, Math.round(sim * 100)));
+}
+
+export function explainRecommendation(
+  arg1: PrototypeMediaItem | TasteVector6D,
+  arg2: PrototypeMediaItem | TasteVector6D,
+  lang?: string
+): string {
+  const item = ('id' in arg1 ? arg1 : arg2) as PrototypeMediaItem;
+  const userVector = ('id' in arg1 ? arg2 : arg1) as TasteVector6D;
+  const targetVec = ('vector' in item ? item : { vector: item }) as PrototypeMediaItem;
+  if (!('id' in targetVec)) {
+    return lang === 'en'
+      ? 'Matched with your 6D Sonic DNA profile'
+      : 'هماهنگ با پروفایل ۶بعدی سلیقه صوتی شما';
+  }
+  const res = buildMatchExplanation(targetVec, userVector, true, [], 'fa');
+  return lang === 'en' ? res.en : res.fa;
+}
+
+export function semanticMoodSearch(
+  arg1: PrototypeMediaItem[] | string,
+  arg2: PrototypeMediaItem[] | string,
+  userVector: TasteVector6D,
+  _options?: { durationBucket?: string; qualityFilter?: string }
+): Array<{ item: PrototypeMediaItem; score: number }> {
+  const catalog = (Array.isArray(arg1) ? arg1 : arg2) as PrototypeMediaItem[];
+  const query = (typeof arg1 === 'string' ? arg1 : arg2) as string;
+  const res = runIntelligentSearch({
+    catalog,
+    filters: {
+      query,
+      mode: 'all',
+      mediaDomain: 'all_audio',
+      excludeTags: [],
+      maxDurationMin: null,
+      minQuality: 'all',
+      unwatchedOnly: false,
+      sortBy: 'relevance'
+    },
+    userVector,
+    personalizationEnabled: true,
+    progressMap: {},
+    hiddenIds: new Set(),
+    blockedTopics: [],
+    feedbackMap: {},
+    lang: 'fa'
+  });
+  return res.bestMatches.map((m) => ({ item: m.item, score: m.score }));
+}
+

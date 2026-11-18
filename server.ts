@@ -1,6 +1,5 @@
 import express, { type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
 import http from 'http';
-import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -14,6 +13,22 @@ import type {
   SortStrategy,
   TasteInteraction
 } from './src/types/cinema.ts';
+import { LIGHTING_PRESETS } from './src/types/lighting.ts';
+import {
+  LOCAL_ADK_AGENTS,
+  orchestrateFastAdkAgent,
+  type FastOrchestrateDomain
+} from './src/agents/registry.ts';
+import { getGraphicAssetManifest } from './src/agents/assetCacheAgent.ts';
+import {
+  applyPresetToRoom,
+  getAllLightingProfiles,
+  isValidCalibrationRoomId,
+  resetLightingProfiles
+} from './src/agents/lightingStore.ts';
+import { runLightingDirectorAgent } from './src/agents/lightingAgent.ts';
+import { selectMusicByPrompt } from './src/agents/musicAiSelector.ts';
+import { isValidRoomSyncId, roomSyncCoordinator } from './src/services/roomSyncServer.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -53,28 +68,41 @@ function writeJsonFile<T>(filePath: string, data: T): void {
   }
 }
 
-async function startServer() {
+export async function createApp(options?: { servePublic?: boolean }) {
   const app = express();
-  const httpServer = http.createServer(app);
-  const PORT = Number(process.env.PORT) || 3000;
+  app.set('trust proxy', 1);
   const serverStartTime = Date.now();
+  const servePublic = options?.servePublic ?? true;
+
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    if (process.env.NODE_ENV === 'production' && req.secure) {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains; preload');
+    }
+    next();
+  });
 
   app.use(express.json({ limit: '2mb' }));
 
-  // Serve static assets from public/ (videos, images) with byte-range support and long-term caching
-  app.use(
-    express.static(path.join(__dirname, 'public'), {
-      maxAge: '14d',
-      setHeaders: (res, filePath) => {
-        if (filePath.endsWith('.mp4') || filePath.endsWith('.webm')) {
-          res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
-          res.setHeader('Accept-Ranges', 'bytes');
-        } else if (filePath.match(/\.(jpg|jpeg|png|webp|svg)$/i)) {
-          res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+  if (servePublic) {
+    // Serve static assets from public/ (videos, images) with byte-range support and long-term caching
+    app.use(
+      express.static(path.join(__dirname, 'public'), {
+        maxAge: '14d',
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('.glb') || filePath.endsWith('.gltf')) {
+            res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+          } else if (filePath.endsWith('.mp4') || filePath.endsWith('.webm')) {
+            res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+            res.setHeader('Accept-Ranges', 'bytes');
+          } else if (filePath.match(/\.(jpg|jpeg|png|webp|svg)$/i)) {
+            res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+          }
         }
-      }
-    })
-  );
+      })
+    );
+  }
 
   // Mount Velora Owner-Controlled Video Catalog Engine Subsystem
   app.use('/api/velora', videoApiRouter);
@@ -85,9 +113,11 @@ async function startServer() {
     const dnaVault = readJsonFile<Record<string, unknown>>(DNA_VAULT_FILE, {});
     res.json({
       status: 'ok',
-      product: 'AETHER Private Cinema Discovery Engine',
+      product: 'aipetros-sound',
+      domainReady: true,
+      publicDomain: process.env.PUBLIC_DOMAIN || process.env.APP_URL || null,
       uptimeSec: Math.floor((Date.now() - serverStartTime) / 1000),
-      engineMode: 'local-neural-ranker',
+      engineMode: 'local-adk-multi-agent',
       externalModels: false,
       customCatalogCount: Array.isArray(customFilms) ? customFilms.length : 0,
       dnaProfilesStored: Object.keys(dnaVault).length
@@ -715,7 +745,266 @@ async function startServer() {
     res.json({ translations });
   });
 
+  // 10. Google ADK (https://adk.dev/) Local Multi-Agent Registry & Fast Orchestrator
+  app.get('/api/agents', (_req, res) => {
+    res.json({
+      product: 'aipetros-sound',
+      framework: 'google-adk',
+      docsUrl: 'https://adk.dev/',
+      agents: LOCAL_ADK_AGENTS
+    });
+  });
+
+  app.post('/api/agents/orchestrate', (req: ExpressRequest, res: ExpressResponse) => {
+    const rawDomain = String(req.body?.domain || 'rooms').trim();
+    const domain: FastOrchestrateDomain = (['search', 'cassette', 'rooms', 'graphics'].includes(
+      rawDomain
+    )
+      ? rawDomain
+      : 'rooms') as FastOrchestrateDomain;
+    const roomId = req.body?.roomId ? String(req.body.roomId).trim() : undefined;
+    const query = req.body?.query ? String(req.body.query).trim() : undefined;
+    const catalog = Array.isArray(req.body?.catalog) ? req.body.catalog : undefined;
+
+    const result = orchestrateFastAdkAgent({
+      domain,
+      roomId,
+      query,
+      catalog
+    });
+    res.json(result);
+  });
+
+  app.get('/api/assets/manifest', (req: ExpressRequest, res: ExpressResponse) => {
+    const forceRefresh = req.query.refresh === '1';
+    res.json(getGraphicAssetManifest(forceRefresh));
+  });
+
+  app.get('/api/agents/lighting/profiles', (_req, res) => {
+    res.json({
+      framework: 'google-adk',
+      agentName: 'lighting_director_agent',
+      profiles: getAllLightingProfiles(),
+      presets: Object.values(LIGHTING_PRESETS).map((p) => ({
+        id: p.id,
+        labelFa: p.labelFa,
+        labelEn: p.labelEn,
+        instruction: p.instruction
+      }))
+    });
+  });
+
+  app.post('/api/agents/lighting/tune', async (req: ExpressRequest, res: ExpressResponse) => {
+    const rawRoomId = String(req.body?.roomId || 'cafe').trim();
+    const instruction = String(req.body?.instruction || '').trim();
+    const audioContext = req.body?.audioContext && typeof req.body.audioContext === 'object'
+      ? req.body.audioContext
+      : undefined;
+
+    if (!isValidCalibrationRoomId(rawRoomId)) {
+      res.status(400).json({ error: 'شناسه اتاق نامعتبر است.' });
+      return;
+    }
+    if (!instruction) {
+      res.status(400).json({ error: 'لطفاً دستور یا توضیح تنظیم نور را وارد کنید.' });
+      return;
+    }
+
+    try {
+      const result = await runLightingDirectorAgent({
+        roomId: rawRoomId,
+        instruction,
+        audioContext
+      });
+      res.json(result);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error('ADK lighting agent execution failed:', msg);
+      res.status(502).json({
+        error: `خطا در اجرای ایجنت ADK: ${msg}`
+      });
+    }
+  });
+
+  app.post('/api/agents/lighting/preset', (req: ExpressRequest, res: ExpressResponse) => {
+    const rawRoomId = String(req.body?.roomId || 'cafe').trim();
+    const presetId = String(req.body?.presetId || '').trim();
+    if (!isValidCalibrationRoomId(rawRoomId)) {
+      res.status(400).json({ error: 'Invalid roomId' });
+      return;
+    }
+    if (!presetId || !LIGHTING_PRESETS[presetId]) {
+      res.status(400).json({ error: 'Invalid presetId' });
+      return;
+    }
+    const profile = applyPresetToRoom(rawRoomId, presetId);
+    res.json({
+      agentName: 'lighting_director_agent',
+      framework: 'google-adk',
+      roomId: rawRoomId,
+      profile,
+      allProfiles: getAllLightingProfiles(),
+      replyFa: `پروفایل نوری «${profile.presetNameFa}» روی صحنه اعمال شد.`
+    });
+  });
+
+  app.post('/api/agents/lighting/reset', (req: ExpressRequest, res: ExpressResponse) => {
+    const rawRoomId = req.body?.roomId ? String(req.body.roomId).trim() : '';
+    let roomId: import('./src/types/lighting.ts').CalibrationRoomId | undefined;
+    if (rawRoomId) {
+      if (!isValidCalibrationRoomId(rawRoomId)) {
+        res.status(400).json({ error: 'Invalid roomId' });
+        return;
+      }
+      roomId = rawRoomId;
+    }
+    const allProfiles = resetLightingProfiles(roomId);
+    res.json({
+      agentName: 'lighting_director_agent',
+      framework: 'google-adk',
+      allProfiles,
+      profile: roomId ? allProfiles[roomId] : undefined,
+      replyFa: 'نورپردازی به تنظیمات استاندارد فیزیکی بازگردانی شد.'
+    });
+  });
+
+  // 11. Collaborative Multi-Device Room Sync (Bluetooth / Wi-Fi Pairing, Nearby Scan, Last-Added-Wins Queue, AI Music Prompt)
+  app.get('/api/rooms/nearby', (_req, res) => {
+    res.json({
+      rooms: roomSyncCoordinator.scanNearbyRooms(),
+      scannedAt: new Date().toISOString()
+    });
+  });
+
+  app.get('/api/rooms/:roomId/state', (req, res) => {
+    const rawRoom = String(req.params.roomId || '').trim();
+    if (!isValidRoomSyncId(rawRoom)) {
+      res.status(400).json({ error: 'Invalid roomId' });
+      return;
+    }
+    res.json({ state: roomSyncCoordinator.getRoomState(rawRoom) });
+  });
+
+  app.post('/api/rooms/:roomId/join', (req, res) => {
+    const rawRoom = String(req.params.roomId || '').trim();
+    if (!isValidRoomSyncId(rawRoom)) {
+      res.status(400).json({ error: 'Invalid roomId' });
+      return;
+    }
+    const peerId = String(req.body?.peerId || `peer-${Date.now()}`).trim();
+    const deviceName = String(req.body?.deviceName || 'Device').trim();
+    const connectionType = req.body?.connectionType === 'bluetooth' ? 'bluetooth' : 'wifi';
+    const isHost = Boolean(req.body?.isHost);
+    const routed = req.body?.routed !== false;
+    const state = roomSyncCoordinator.joinPeer(rawRoom, {
+      peerId,
+      deviceName,
+      connectionType,
+      isHost,
+      routed
+    });
+    res.json({ state });
+  });
+
+  app.post('/api/rooms/:roomId/leave', (req, res) => {
+    const rawRoom = String(req.params.roomId || '').trim();
+    if (!isValidRoomSyncId(rawRoom)) {
+      res.status(400).json({ error: 'Invalid roomId' });
+      return;
+    }
+    const peerId = String(req.body?.peerId || '').trim();
+    const state = roomSyncCoordinator.leavePeer(rawRoom, peerId);
+    res.json({ state });
+  });
+
+  app.post('/api/rooms/:roomId/route', (req, res) => {
+    const rawRoom = String(req.params.roomId || '').trim();
+    if (!isValidRoomSyncId(rawRoom)) {
+      res.status(400).json({ error: 'Invalid roomId' });
+      return;
+    }
+    const peerId = String(req.body?.peerId || '').trim();
+    const routed = Boolean(req.body?.routed);
+    const state = roomSyncCoordinator.updatePeerRouting(rawRoom, peerId, routed);
+    res.json({ state });
+  });
+
+  app.post('/api/rooms/:roomId/track', (req, res) => {
+    const rawRoom = String(req.params.roomId || '').trim();
+    if (!isValidRoomSyncId(rawRoom)) {
+      res.status(400).json({ error: 'Invalid roomId' });
+      return;
+    }
+    const track = req.body?.track;
+    if (!track || typeof track !== 'object' || !track.titleFa) {
+      res.status(400).json({ error: 'Invalid track payload' });
+      return;
+    }
+    const state = roomSyncCoordinator.setRoomTrackLastWins(rawRoom, {
+      id: String(track.id || `track-${Date.now()}`),
+      titleFa: String(track.titleFa),
+      titleEn: String(track.titleEn || track.titleFa),
+      creatorFa: track.creatorFa ? String(track.creatorFa) : undefined,
+      creatorEn: track.creatorEn ? String(track.creatorEn) : undefined,
+      categoryFa: track.categoryFa ? String(track.categoryFa) : undefined,
+      categoryEn: track.categoryEn ? String(track.categoryEn) : undefined,
+      bpm: Math.max(55, Math.min(185, Number(track.bpm) || 110)),
+      musicalKey: track.musicalKey ? String(track.musicalKey) : 'Cm',
+      posterUrl: String(track.posterUrl || '/assets/aistudio/image_12f14924.png'),
+      accentHex: String(track.accentHex || '#F5B942'),
+      durationSec: Math.max(30, Number(track.durationSec) || 240),
+      mediaType: track.mediaType || 'music',
+      addedByDeviceName: String(track.addedByDeviceName || 'My Device'),
+      addedVia: track.addedVia === 'bluetooth' ? 'bluetooth' : track.addedVia === 'wifi' ? 'wifi' : 'local',
+      addedAt: new Date().toISOString(),
+      aiPrompt: track.aiPrompt ? String(track.aiPrompt) : undefined
+    });
+    res.json({ state });
+  });
+
+  app.post('/api/rooms/:roomId/playback', (req, res) => {
+    const rawRoom = String(req.params.roomId || '').trim();
+    if (!isValidRoomSyncId(rawRoom)) {
+      res.status(400).json({ error: 'Invalid roomId' });
+      return;
+    }
+    const isPlaying = Boolean(req.body?.isPlaying);
+    const state = roomSyncCoordinator.setRoomPlayback(rawRoom, isPlaying);
+    res.json({ state });
+  });
+
+  app.post('/api/rooms/ai-music', async (req: ExpressRequest, res: ExpressResponse) => {
+    const prompt = String(req.body?.prompt || '').trim();
+    const roomId = isValidRoomSyncId(String(req.body?.roomId || 'cafe'))
+      ? String(req.body?.roomId || 'cafe')
+      : 'cafe';
+    const catalogSummary = Array.isArray(req.body?.catalogSummary) ? req.body.catalogSummary : [];
+
+    if (!prompt) {
+      res.status(400).json({ error: 'لطفاً متن درخواست موسیقی را وارد کنید.' });
+      return;
+    }
+
+    const selection = await selectMusicByPrompt({
+      prompt,
+      roomId,
+      catalogSummary
+    });
+    res.json(selection);
+  });
+
+  return { app };
+}
+
+async function startServer() {
+  const { app } = await createApp({ servePublic: true });
+  const httpServer = http.createServer(app);
+  const PORT = Number(process.env.PORT) || 3000;
+
+  roomSyncCoordinator.attachWebSocketServer(httpServer);
+
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
@@ -729,15 +1018,33 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(__dirname, 'dist');
-    app.use(express.static(distPath));
-    app.use((_req, res) => {
+    app.use(
+      express.static(distPath, {
+        maxAge: '14d',
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('.html')) {
+            res.setHeader('Cache-Control', 'no-cache');
+          } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+            res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+          }
+        }
+      })
+    );
+    app.use((req, res) => {
+      if (/\.(glb|gltf|bin|hdr|exr|wasm|png|jpe?g|webp|svg|ico|woff2?|css|js|map)$/i.test(req.path)) {
+        res.status(404).json({ error: 'Asset not found' });
+        return;
+      }
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   httpServer.listen(PORT, '0.0.0.0', () => {
-    console.log(`AETHER 18+ Full-Stack Production Server running on http://localhost:${PORT}`);
+    console.log(`aipetros-sound Production Server running on http://localhost:${PORT}`);
   });
 }
 
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}

@@ -1,1020 +1,367 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import {
   ArrowLeft,
-  ArrowRight,
-  Captions,
   Check,
-  Clapperboard,
-  Cpu,
+  Disc3,
   Download,
-  ExternalLink,
-  FileText,
-  Film,
-  Globe2,
-  HardDriveDownload,
-  Loader2,
+  Headphones,
   Maximize2,
   Minimize2,
   Pause,
   Play,
+  Radio,
   RotateCcw,
-  RotateCw,
-  ShieldCheck,
   Sparkles,
-  Star,
+  Subtitles,
   Volume2,
-  VolumeX,
-  Wand2
+  VolumeX
 } from 'lucide-react';
-import { AnimatePresence, motion } from 'motion/react';
 import type {
-  LanguageCode,
-  OfflineDownloadRecord,
+  DownloadRecord,
+  PlaybackProgress,
   PrototypeMediaItem,
-  WatchProgressEntry
+  SubtitleCue,
+  SubtitleLang,
+  UiLang
 } from '../types';
-import { formatBytes, loadOfflineMediaBlob, triggerBrowserDownload } from '../downloadEngine';
-import {
-  fetchBackendFilmDetails,
-  pickRandomCardinalEntrances,
-  type BackendFilmDetailsResponse,
-  type BackendStreamQuality
-} from '../filmDetailsClient';
-import {
-  buildSrtContent,
-  buildWebVttContent,
-  generateAiSyncedSubtitles,
-  type AiSubtitleSyncResult
-} from '../subtitleAiEngine';
-import { useT } from '../i18n';
-import { Button, formatDuration } from '../components/UiPrimitives';
+import { CinemaPosterImage, formatDuration } from '../components/UiPrimitives';
+import { formatBytes } from '../downloadEngine';
+import { generateAiSyncedSubtitles, type AiSyncedSubtitleResult } from '../subtitleAiEngine';
+import { useAutoTranslation } from '../i18n';
 
 interface CinematicPlayerScreenProps {
   item: PrototypeMediaItem | null;
-  lang: LanguageCode;
-  initialProgress?: WatchProgressEntry;
-  downloadRecord?: OfflineDownloadRecord;
-  defaultQuality: 'auto' | '4k' | '1080p' | '720p';
-  defaultSubtitleLang: 'fa' | 'en' | 'off';
+  catalog: PrototypeMediaItem[];
+  lang: UiLang;
+  playbackMode?: 'movie' | 'trailer';
+  progress?: PlaybackProgress;
+  isFavorite: boolean;
+  isDownloaded?: boolean;
+  downloadRecord?: DownloadRecord;
+  defaultSubtitleLang: SubtitleLang;
   defaultSpeed: number;
-  initialSelectedQualityId?: string;
-  initialPlaybackMode?: 'movie' | 'trailer';
-  onSaveProgress: (contentId: string, positionSec: number, durationSec: number, completed: boolean) => void;
-  onDownload: (
-    item: PrototypeMediaItem,
-    saveFileToDevice?: boolean,
-    selectedQuality?: BackendStreamQuality
+  preferredQuality: string;
+  reducedMotion?: boolean;
+  onUpdateProgress: (
+    contentId: string,
+    positionSec: number,
+    durationSec: number,
+    completed?: boolean
   ) => void;
-  onOpenLanguagePicker: () => void;
-  onBack: () => void;
+  onSelectItem: (item: PrototypeMediaItem) => void;
+  onSwitchPlaybackMode?: (mode: 'movie' | 'trailer') => void;
+  onDownloadItem?: (
+    item: PrototypeMediaItem,
+    saveAsFile?: boolean,
+    selectedQuality?: { id: string; resolution: string; label: string; estimatedSizeMb: number }
+  ) => void;
+  onToggleFavorite: (itemOrId: any) => void;
+  onBackToBrowse: () => void;
+  onOpenLanguagePicker?: () => void;
+  onOpenInDj?: (
+    item?: PrototypeMediaItem,
+    tab?: 'dj_console' | 'concert_stage' | 'cafe_room' | 'party_room' | 'library_room' | 'playlist_studio'
+  ) => void;
 }
 
 export function CinematicPlayerScreen({
   item,
   lang,
-  initialProgress,
+  progress,
+  isDownloaded,
   downloadRecord,
-  defaultQuality,
   defaultSubtitleLang,
   defaultSpeed,
-  initialSelectedQualityId,
-  initialPlaybackMode = 'movie',
-  onSaveProgress,
-  onDownload,
-  onOpenLanguagePicker,
-  onBack
+  onUpdateProgress,
+  onDownloadItem,
+  onBackToBrowse,
+  onOpenInDj
 }: CinematicPlayerScreenProps) {
-  const { t, dir, languageInfo, translateTexts, isTranslating } = useT();
-  const stageRef = useRef<HTMLDivElement | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const trailerVideoRef = useRef<HTMLVideoElement | null>(null);
-
-  const [playbackMode, setPlaybackMode] = useState<'movie' | 'trailer'>(initialPlaybackMode);
-  useEffect(() => {
-    setPlaybackMode(initialPlaybackMode);
-  }, [initialPlaybackMode, item?.id]);
-
-  const [details, setDetails] = useState<BackendFilmDetailsResponse | null>(null);
-  const trailerDuration = details?.trailer?.durationSec || 45;
-  const duration = playbackMode === 'trailer' ? trailerDuration : item?.durationSec ?? 360;
-
-  const startOffset =
-    playbackMode === 'movie' &&
-    initialProgress &&
-    !initialProgress.completed &&
-    initialProgress.positionSec < (item?.durationSec ?? 360) - 5
-      ? initialProgress.positionSec
-      : 0;
-
   const [isPlaying, setIsPlaying] = useState(true);
-  const [currentTime, setCurrentTime] = useState(startOffset);
-  const currentTimeRef = useRef(startOffset);
-  currentTimeRef.current = currentTime;
+  const [currentTime, setCurrentTime] = useState(progress?.positionSec ?? 0);
+  const [volume, setVolume] = useState(0.85);
   const [muted, setMuted] = useState(false);
-  const [volume, setVolume] = useState(0.8);
-  const [selectedQualityId, setSelectedQualityId] = useState<string>(
-    initialSelectedQualityId || defaultQuality
-  );
-  const [subMode, setSubMode] = useState<'auto' | 'fa' | 'en' | 'off'>(
-    lang !== 'fa' && lang !== 'en' && defaultSubtitleLang !== 'off' ? 'auto' : defaultSubtitleLang
-  );
-  const [speed, setSpeed] = useState<number>(defaultSpeed);
+  const [speed, setSpeed] = useState<number>(defaultSpeed || 1);
+  const [subLang, setSubLang] = useState<SubtitleLang>(defaultSubtitleLang || 'fa');
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [playingFromOfflineVault, setPlayingFromOfflineVault] = useState(false);
-  const [offlineBlobAvailable, setOfflineBlobAvailable] = useState(false);
-  const [streamReady, setStreamReady] = useState(false);
-  const [liveTrailerVideoActive, setLiveTrailerVideoActive] = useState(false);
+  const [aiSyncedSub, setAiSyncedSub] = useState<AiSyncedSubtitleResult | null>(null);
 
-  // Autonomous AI Subtitle Auto-Match & Sync state
-  const [aiSyncing, setAiSyncing] = useState(false);
-  const [aiSyncedSub, setAiSyncedSub] = useState<AiSubtitleSyncResult | null>(null);
-  const [syncOffsetMs, setSyncOffsetMs] = useState<number>(0);
-  const [subtitlePanelOpen, setSubtitlePanelOpen] = useState<boolean>(false);
-  const [vttTrackUrl, setVttTrackUrl] = useState<string | null>(null);
+  const playerContainerRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const cardEntrances = useMemo(() => pickRandomCardinalEntrances(4), [item?.id]);
+  const effectiveDuration = item?.durationSec ?? 300;
 
-  const isPlayingRef = useRef(isPlaying);
-  isPlayingRef.current = isPlaying;
-
-  const isDownloading = downloadRecord?.status === 'downloading';
-  const isDownloaded = downloadRecord?.status === 'completed';
-
-  // Fetch IMDb + Backend Qualities + Trailer info when item loads
   useEffect(() => {
-    if (!item) {
-      setDetails(null);
-      return;
-    }
-    let active = true;
-    void fetchBackendFilmDetails(item).then((res) => {
-      if (!active) return;
-      setDetails(res);
-      if (initialSelectedQualityId && res.qualities.some((q) => q.id === initialSelectedQualityId)) {
-        setSelectedQualityId(initialSelectedQualityId);
-      } else {
-        const rec = res.qualities.find((q) => q.recommended) || res.qualities[0];
-        if (rec) setSelectedQualityId(rec.id);
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, [item, initialSelectedQualityId]);
-
-  // Batch translate IMDb + quality + trailer data + AI synced subtitle cues on language change
-  useEffect(() => {
-    if (!details || lang === 'en') return;
-    const imdb = details.imdb;
-    const extraCueTexts = aiSyncedSub ? aiSyncedSub.cues.map((c) => c.en) : [];
-    void translateTexts([
-      imdb.matchedTitle,
-      imdb.director,
-      imdb.typeLabel,
-      imdb.country,
-      imdb.plotSummary,
-      imdb.imdbReferenceNote,
-      ...(details.trailer ? [details.trailer.title] : []),
-      ...imdb.cast,
-      ...imdb.genres,
-      ...imdb.spokenLanguages,
-      ...details.qualities.map((q) => q.label),
-      ...details.qualities.map((q) => q.batteryMode),
-      ...details.qualities.map((q) => q.audio),
-      ...extraCueTexts
-    ]);
-  }, [details, lang, aiSyncedSub, translateTexts]);
-
-  const backendQualities = details?.qualities || [];
-  const activeQuality =
-    backendQualities.find((q) => q.id === selectedQualityId) || backendQualities[0];
-
-  // Reset AI synced subtitle state when switching film
-  useEffect(() => {
-    setAiSyncedSub(null);
-    setSyncOffsetMs(0);
-    setLiveTrailerVideoActive(false);
+    if (!item) return;
+    setCurrentTime(progress?.positionSec ?? 0);
+    setIsPlaying(true);
+    const synced = generateAiSyncedSubtitles(item, 'fa', item.durationSec);
+    setAiSyncedSub(synced);
   }, [item?.id]);
 
-  // Reset timeline cleanly when switching between Movie and Trailer mode
+  // Playback timer
   useEffect(() => {
-    const targetOffset =
-      playbackMode === 'movie' &&
-      item &&
-      initialProgress &&
-      !initialProgress.completed &&
-      initialProgress.positionSec < item.durationSec - 5
-        ? initialProgress.positionSec
-        : 0;
-    currentTimeRef.current = targetOffset;
-    setCurrentTime(targetOffset);
-    setIsPlaying(true);
-    setLiveTrailerVideoActive(false);
-  }, [playbackMode, item?.id]);
-
-  // Detect offline blob availability
-  useEffect(() => {
-    if (!item) return;
-    let active = true;
-    void loadOfflineMediaBlob(item.id).then((blob) => {
-      if (active) {
-        const hasBlob = Boolean(blob);
-        setOfflineBlobAvailable(hasBlob);
-        if (hasBlob && typeof navigator !== 'undefined' && navigator.onLine === false) {
-          setPlayingFromOfflineVault(true);
+    if (!item || !isPlaying) return;
+    const interval = window.setInterval(() => {
+      setCurrentTime((prev: number) => {
+        const next = prev + 0.25 * speed;
+        if (next >= effectiveDuration) {
+          setIsPlaying(false);
+          onUpdateProgress(item.id, effectiveDuration, effectiveDuration, true);
+          return effectiveDuration;
         }
-      }
-    });
-    return () => {
-      active = false;
-    };
-  }, [item?.id, isDownloaded]);
-
-  // Autonomous AI Subtitle Match & Drift Calibration handler
-  const handleRunAiSubtitleSync = useCallback(() => {
-    if (!item || aiSyncing) return;
-    setAiSyncing(true);
-    setSubtitlePanelOpen(true);
-
-    window.setTimeout(() => {
-      const matched = generateAiSyncedSubtitles(
-        item,
-        details?.imdb || null,
-        activeQuality?.resolution || item.quality,
-        lang
-      );
-      setAiSyncedSub(matched);
-      setSyncOffsetMs(matched.autoOffsetMs);
-      if (subMode === 'off') {
-        setSubMode('auto');
-      }
-      if (lang !== 'en' && lang !== 'fa') {
-        void translateTexts(matched.cues.map((c) => c.en));
-      }
-      setAiSyncing(false);
-    }, 520);
-  }, [item, aiSyncing, details, activeQuality, lang, subMode, translateTexts]);
-
-  // Helper to resolve subtitle line in active language
-  const renderCueText = useCallback(
-    (enText: string, faText: string): string => {
-      if (subMode === 'fa') return faText;
-      if (subMode === 'en') return enText;
-      return t(enText, faText);
-    },
-    [subMode, t]
-  );
-
-  // Build live WebVTT Blob Track URL & attach to <video> whenever cues, offset, or lang change
-  useEffect(() => {
-    if (!item || subMode === 'off') {
-      setVttTrackUrl((prev) => {
-        if (prev) URL.revokeObjectURL(prev);
-        return null;
+        if (Math.floor(next) % 3 === 0) {
+          onUpdateProgress(item.id, Math.floor(next), effectiveDuration, false);
+        }
+        return next;
       });
-      return;
-    }
+    }, 250);
+    return () => window.clearInterval(interval);
+  }, [item, isPlaying, speed, effectiveDuration, onUpdateProgress]);
 
-    const activeCues = aiSyncedSub
-      ? aiSyncedSub.cues
-      : item.subtitles.map((s, idx) => ({
-          id: `base-${idx}`,
-          startSec: s.startSec,
-          endSec: s.endSec,
-          en: s.en,
-          fa: s.fa
-        }));
-
-    const vttText = buildWebVttContent(activeCues, syncOffsetMs, (cue) =>
-      renderCueText(cue.en, cue.fa)
-    );
-    const blob = new Blob([vttText], { type: 'text/vtt;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-
-    setVttTrackUrl((prev) => {
-      if (prev) URL.revokeObjectURL(prev);
-      return url;
-    });
-
-    return () => {
-      URL.revokeObjectURL(url);
-    };
-  }, [item, aiSyncedSub, syncOffsetMs, subMode, renderCueText]);
-
-  const handleDownloadMatchedSrt = useCallback(() => {
-    if (!item) return;
-    const synced =
-      aiSyncedSub ||
-      generateAiSyncedSubtitles(
-        item,
-        details?.imdb || null,
-        activeQuality?.resolution || item.quality,
-        lang
-      );
-    const srtText = buildSrtContent(synced.cues, syncOffsetMs, (cue) =>
-      renderCueText(cue.en, cue.fa)
-    );
-    const blob = new Blob([srtText], { type: 'text/plain;charset=utf-8' });
-    triggerBrowserDownload(blob, synced.matchedFilename);
-  }, [item, aiSyncedSub, details, activeQuality, lang, syncOffsetMs, renderCueText]);
-
-  // Procedural Canvas -> HTML5 <video> MediaStream engine (adapts to Trailer vs Movie cadence)
+  // Sonic Audio Visualizer Canvas
   useEffect(() => {
-    if (!item) return;
     const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas) return;
+    if (!canvas || !item) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     const posterImg = new Image();
+    posterImg.crossOrigin = 'anonymous';
     posterImg.src = item.posterUrl;
 
-    let frame = 0;
-    let rafId = 0;
+    let animId = 0;
+    let phase = 0;
 
-    const drawFrame = () => {
-      if (isPlayingRef.current) {
-        frame += playbackMode === 'trailer' ? 2.4 : 1;
-      }
+    const renderFrame = () => {
+      phase += isPlaying ? 0.045 * speed : 0.004;
       const w = canvas.width;
       const h = canvas.height;
-      ctx.fillStyle = '#06070C';
-      ctx.fillRect(0, 0, w, h);
+      ctx.clearRect(0, 0, w, h);
 
       if (posterImg.complete && posterImg.naturalWidth > 0) {
-        const zoomFactor =
-          playbackMode === 'trailer'
-            ? 1.06 + Math.sin(frame * 0.025) * 0.05
-            : 1.04 + Math.sin(frame * 0.015) * 0.03;
-        const dw = w * zoomFactor;
-        const dh = h * zoomFactor;
-        const dx = (w - dw) / 2 + Math.cos(frame * 0.012) * 14;
-        const dy = (h - dh) / 2 + Math.sin(frame * 0.01) * 10;
-        ctx.globalAlpha = isPlayingRef.current ? 0.92 : 0.6;
-        ctx.drawImage(posterImg, dx, dy, dw, dh);
-        ctx.globalAlpha = 1;
+        const zoom = 1.05 + Math.sin(phase * 0.25) * 0.025;
+        const sw = w * zoom;
+        const sh = h * zoom;
+        ctx.drawImage(posterImg, (w - sw) / 2, (h - sh) / 2, sw, sh);
       }
 
-      const grad = ctx.createRadialGradient(
-        w * (0.5 + Math.sin(frame * 0.02) * 0.16),
-        h * 0.45,
-        24,
-        w * 0.5,
-        h * 0.5,
-        w * 0.68
-      );
-      grad.addColorStop(0, `${item.accentHex}3D`);
-      grad.addColorStop(1, 'rgba(6, 7, 12, 0.72)');
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, 'rgba(6, 7, 12, 0.45)');
+      grad.addColorStop(0.55, 'rgba(6, 7, 12, 0.72)');
+      grad.addColorStop(1, 'rgba(6, 7, 12, 0.96)');
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, w, h);
 
-      rafId = window.requestAnimationFrame(drawFrame);
+      // Draw Live Sonic Frequency Bars
+      const barCount = 56;
+      const totalWidth = w * 0.72;
+      const startX = (w - totalWidth) / 2;
+      const barW = totalWidth / barCount - 4;
+      const baseY = h * 0.68;
+
+      for (let i = 0; i < barCount; i++) {
+        const wave =
+          isPlaying && !muted
+            ? Math.abs(Math.sin(phase * 1.8 + i * 0.28) * Math.cos(phase * 0.9 - i * 0.14))
+            : 0.08;
+        const barH = Math.max(6, wave * 130);
+        ctx.fillStyle = i % 2 === 0 ? 'rgba(245, 185, 66, 0.85)' : 'rgba(0, 240, 255, 0.75)';
+        ctx.beginPath();
+        ctx.roundRect(startX + i * (barW + 4), baseY - barH / 2, barW, barH, 3);
+        ctx.fill();
+      }
+
+      animId = requestAnimationFrame(renderFrame);
     };
 
-    rafId = window.requestAnimationFrame(drawFrame);
+    animId = requestAnimationFrame(renderFrame);
+    return () => cancelAnimationFrame(animId);
+  }, [item?.id, item?.posterUrl, isPlaying, speed, muted]);
 
-    try {
-      const streamable = canvas as HTMLCanvasElement & { captureStream?: (fps?: number) => MediaStream };
-      if (video && typeof streamable.captureStream === 'function') {
-        const mediaStream = streamable.captureStream(24);
-        video.srcObject = mediaStream;
-        video.muted = true;
-        void video.play().catch(() => {});
-        setStreamReady(true);
-      }
-    } catch {
-      setStreamReady(false);
-    }
-
-    return () => {
-      window.cancelAnimationFrame(rafId);
-      if (video && video.srcObject) {
-        const stream = video.srcObject as MediaStream;
-        stream.getTracks().forEach((tr) => tr.stop());
-        video.srcObject = null;
-      }
-    };
-  }, [item?.id, item?.posterUrl, item?.accentHex, playbackMode]);
-
-  // Sync external MP4 trailer video element play/pause/mute state when in Trailer Mode
-  useEffect(() => {
-    const trVideo = trailerVideoRef.current;
-    if (!trVideo || playbackMode !== 'trailer' || !details?.trailer?.previewVideoUrl) return;
-    trVideo.muted = muted;
-    trVideo.volume = volume;
-    trVideo.playbackRate = speed;
-    if (isPlaying) {
-      void trVideo.play().catch(() => {});
+  const toggleFullscreen = () => {
+    const el = playerContainerRef.current;
+    if (!el) return;
+    if (!document.fullscreenElement) {
+      el.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
     } else {
-      trVideo.pause();
+      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {});
     }
-  }, [isPlaying, muted, volume, speed, playbackMode, details?.trailer?.previewVideoUrl]);
+  };
 
-  // Playback progress ticker
-  useEffect(() => {
-    if (!item || !isPlaying) return;
-    const id = window.setInterval(() => {
-      const next = Math.min(duration, currentTimeRef.current + speed);
-      currentTimeRef.current = next;
-      setCurrentTime(next);
-      if (playbackMode === 'movie') {
-        onSaveProgress(item.id, next, duration, next >= duration);
-      }
-      if (next >= duration) {
-        setIsPlaying(false);
-      }
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [item, duration, isPlaying, speed, playbackMode, onSaveProgress]);
-
-  // Robust Fullscreen: tries Native Fullscreen API AND applies fixed-viewport Cinema Fullscreen
-  // cleanly so it works 100% inside iframes, iOS Safari, Android, and desktop browsers!
-  const toggleFullscreen = useCallback(async () => {
-    const stageEl = stageRef.current as (HTMLDivElement & {
-      webkitRequestFullscreen?: () => Promise<void> | void;
-    }) | null;
-    const doc = document as Document & {
-      webkitExitFullscreen?: () => Promise<void> | void;
-      webkitFullscreenElement?: Element | null;
-    };
-
-    const nextState = !isFullscreen;
-    setIsFullscreen(nextState);
-
-    if (!stageEl) return;
-    try {
-      if (nextState) {
-        if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
-          if (typeof stageEl.requestFullscreen === 'function') {
-            await stageEl.requestFullscreen();
-          } else if (typeof stageEl.webkitRequestFullscreen === 'function') {
-            await stageEl.webkitRequestFullscreen();
-          }
-        }
-      } else {
-        if (doc.fullscreenElement && typeof doc.exitFullscreen === 'function') {
-          await doc.exitFullscreen();
-        } else if (doc.webkitFullscreenElement && typeof doc.webkitExitFullscreen === 'function') {
-          await doc.webkitExitFullscreen();
-        }
-      }
-    } catch {
-      // Viewport fixed fullscreen overlay remains active cleanly even when iframe blocks native Fullscreen API
-    }
-  }, [isFullscreen]);
-
-  // Keep state synced when native Escape exits browser fullscreen & lock scroll while fullscreen
-  useEffect(() => {
-    const onNativeFsChange = () => {
-      const fsActive = Boolean(
-        document.fullscreenElement ||
-          (document as Document & { webkitFullscreenElement?: Element | null }).webkitFullscreenElement
-      );
-      if (!fsActive && isFullscreen) {
-        // Keep viewport fullscreen unless exited via Esc/toggle button; if native FS exited via Esc, exit cleanly
-        setIsFullscreen(false);
-      }
-    };
-    document.addEventListener('fullscreenchange', onNativeFsChange);
-    document.addEventListener('webkitfullscreenchange', onNativeFsChange);
-    return () => {
-      document.removeEventListener('fullscreenchange', onNativeFsChange);
-      document.removeEventListener('webkitfullscreenchange', onNativeFsChange);
-    };
-  }, [isFullscreen]);
-
-  useEffect(() => {
-    if (!isFullscreen) return;
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsFullscreen(false);
-        if (document.fullscreenElement) {
-          void document.exitFullscreen().catch(() => {});
-        }
-      }
-    };
-    window.addEventListener('keydown', onEsc);
-    return () => {
-      document.body.style.overflow = prevOverflow;
-      window.removeEventListener('keydown', onEsc);
-    };
-  }, [isFullscreen]);
-
-  // Keyboard shortcuts
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.code === 'Space') {
-        e.preventDefault();
-        setIsPlaying((p) => !p);
-      } else if (e.key.toLowerCase() === 'j') {
-        setCurrentTime((tm) => Math.max(0, tm - 10));
-      } else if (e.key.toLowerCase() === 'l') {
-        setCurrentTime((tm) => Math.min(duration, tm + 10));
-      } else if (e.key.toLowerCase() === 'm') {
-        setMuted((m) => !m);
-      } else if (e.key.toLowerCase() === 'f') {
-        e.preventDefault();
-        void toggleFullscreen();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [duration, toggleFullscreen]);
-
-  // Resolve current live subtitle cue honoring AI Synced Subtitles + calibration offset
-  const activeSubtitle = useMemo(() => {
-    if (!item || subMode === 'off') return null;
-
-    if (playbackMode === 'trailer') {
-      const idx = Math.min(2, Math.floor((currentTime / Math.max(1, duration)) * 3));
-      const hl = details?.trailer?.highlights?.[idx];
-      return hl
-        ? `${t('Official Trailer', 'تریلر رسمی')} · ${t(hl.label)}`
-        : `${t('Official Trailer', 'تریلر رسمی')} — ${t(item.titleEn, item.titleFa)}`;
-    }
-
-    const effectiveTime = currentTime - syncOffsetMs / 1000;
-    const pool = aiSyncedSub
-      ? aiSyncedSub.cues
-      : item.subtitles.map((s, idx) => ({
-          id: `base-${idx}`,
-          startSec: s.startSec,
-          endSec: s.endSec,
-          en: s.en,
-          fa: s.fa
-        }));
-
-    const match = pool.find((s) => effectiveTime >= s.startSec && effectiveTime <= s.endSec);
-    if (match) {
-      return renderCueText(match.en, match.fa);
-    }
-
-    if (aiSyncedSub && pool.length > 0) {
-      const nearest = pool.reduce((best, cur) =>
-        Math.abs(cur.startSec - effectiveTime) < Math.abs(best.startSec - effectiveTime) ? cur : best
-      );
-      return renderCueText(nearest.en, nearest.fa);
-    }
-
-    if (currentTime > 0 && item.subtitles.length > 0) {
-      const prefix = t('Live Subtitles', 'زیرنویس زنده');
-      return `[${prefix} · ${activeQuality ? activeQuality.resolution : selectedQualityId}] ${t(
-        item.titleEn,
-        item.titleFa
-      )}`;
-    }
-    return null;
-  }, [
-    item,
-    subMode,
-    playbackMode,
-    currentTime,
-    duration,
-    details,
-    syncOffsetMs,
-    aiSyncedSub,
-    activeQuality,
-    selectedQualityId,
-    renderCueText,
-    t
-  ]);
+  const { t } = useAutoTranslation(lang);
 
   if (!item) {
     return (
-      <div className="my-12 rounded-[28px] border border-white/12 bg-[#0D101A] p-8 text-center space-y-4">
-        <p className="text-sm text-[#A3AEC2]">
-          {t('No media item selected for playback.', 'هنوز اثری برای پخش انتخاب نشده است.')}
+      <div className="my-12 rounded-3xl border border-white/10 bg-[#0A0A0F] p-8 text-center max-w-lg mx-auto space-y-4">
+        <p className="text-base font-semibold text-[#F8FAFC]">
+          {t('No audio track selected', 'هنوز قطعه صوتی انتخاب نشده است')}
         </p>
-        <Button onClick={onBack}>{t('Return to Universe', 'بازگشت به جهان من')}</Button>
+        <button
+          type="button"
+          onClick={onBackToBrowse}
+          className="min-h-[44px] inline-flex items-center gap-2 rounded-xl bg-[#F5B942] px-5 py-2.5 text-sm font-bold text-[#06070C] cursor-pointer"
+        >
+          <RotateCcw className="h-4 w-4" />
+          <span>{t('Back to Sonic Universe', 'بازگشت به جهان صوتی')}</span>
+        </button>
       </div>
     );
   }
 
-  const BackIcon = dir === 'rtl' ? ArrowRight : ArrowLeft;
   const title = t(item.titleEn, item.titleFa);
+  const synopsis = t(item.synopsisEn, item.synopsisFa);
   const category = t(item.categoryEn, item.categoryFa);
-  const synopsis =
-    details?.imdb && details.imdb.plotSummary !== item.synopsisEn
-      ? t(details.imdb.plotSummary)
-      : t(item.synopsisEn, item.synopsisFa);
 
-  const getMotionProps = (idx: number) => {
-    const ent = cardEntrances[idx] || { initialX: 0, initialY: 28, delay: 0 };
-    return {
-      initial: { opacity: 0, x: ent.initialX, y: ent.initialY },
-      animate: { opacity: 1, x: 0, y: 0 },
-      transition: { type: 'spring' as const, stiffness: 280, damping: 24, delay: ent.delay }
-    };
-  };
+  const activeCue: SubtitleCue | undefined = useMemo(() => {
+    if (subLang === 'off') return undefined;
+    const cuePool: SubtitleCue[] = aiSyncedSub?.cues ?? item.subtitles;
+    return cuePool.find((c: SubtitleCue) => currentTime >= c.startSec && currentTime <= c.endSec);
+  }, [subLang, currentTime, aiSyncedSub, item.subtitles]);
+
+  const cycleSpeeds: number[] = [0.75, 1, 1.25, 1.5];
 
   return (
-    <div className="space-y-5 pb-12 overflow-x-hidden">
-      {/* Player Top Navigation & Trailer / Full Movie Mode Switch */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 sm:gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" size="sm" onClick={onBack}>
-            <BackIcon className="h-4 w-4" />
-            <span>{t('Back', 'بازگشت')}</span>
-          </Button>
-
-          {/* Official Trailer vs Full Film Mode Pill */}
-          <div className="inline-flex items-center rounded-full border border-white/15 bg-[#0D101A] p-1">
-            <button
-              type="button"
-              onClick={() => setPlaybackMode('movie')}
-              className={`min-h-[34px] inline-flex items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors cursor-pointer ${
-                playbackMode === 'movie'
-                  ? 'bg-[#F5B942] text-[#06070C] font-semibold'
-                  : 'text-[#A3AEC2] hover:text-white'
-              }`}
-            >
-              <Film className="h-3.5 w-3.5" />
-              <span>{t('Full Movie', 'فیلم کامل')}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setPlaybackMode('trailer')}
-              className={`min-h-[34px] inline-flex items-center gap-1.5 rounded-full px-3 text-xs font-medium transition-colors cursor-pointer ${
-                playbackMode === 'trailer'
-                  ? 'bg-[#F5B942] text-[#06070C] font-semibold'
-                  : 'text-[#A3AEC2] hover:text-white'
-              }`}
-            >
-              <Clapperboard className="h-3.5 w-3.5" />
-              <span>{t('Watch Trailer', 'پخش تریلر')}</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            variant={aiSyncedSub ? 'primary' : 'secondary'}
-            size="sm"
-            onClick={handleRunAiSubtitleSync}
-            disabled={aiSyncing}
-          >
-            {aiSyncing ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Wand2 className="h-3.5 w-3.5" />
-            )}
-            <span>
-              {aiSyncing
-                ? t('AI Syncing...', 'در حال همسان‌سازی AI...')
-                : aiSyncedSub
-                ? `${t('AI Sub Synced', 'زیرنویس همسان‌سازی شد')} (${aiSyncedSub.confidencePct}%)`
-                : t('AI Auto-Sync Subtitles', 'همسان‌سازی هوشمند زیرنویس')}
-            </span>
-          </Button>
-
-          <Button variant="secondary" size="sm" onClick={onOpenLanguagePicker}>
-            <Globe2 className="h-3.5 w-3.5 text-[#F5B942]" />
-            <span>
-              {isTranslating
-                ? t('Translating...', 'در حال ترجمه...')
-                : `${t('Translate', 'ترجمه')}: ${languageInfo.nativeName}`}
-            </span>
-          </Button>
-
-          {(isDownloaded || offlineBlobAvailable) && (
-            <Button
-              variant={playingFromOfflineVault ? 'primary' : 'secondary'}
-              size="sm"
-              onClick={() => setPlayingFromOfflineVault((v) => !v)}
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              <span>
-                {playingFromOfflineVault
-                  ? t('Playing Offline Vault', 'در حال پخش از حافظه آفلاین')
-                  : t('Switch to Offline Copy', 'پخش نسخه آفلاین')}
-              </span>
-            </Button>
-          )}
-
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={isDownloading}
-            onClick={() => onDownload(item, false, activeQuality)}
-          >
-            {isDownloading ? (
-              <>
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-[#F5B942]" />
-                <span>{downloadRecord.progressPct}%</span>
-              </>
-            ) : isDownloaded ? (
-              <>
-                <Check className="h-3.5 w-3.5 text-[#34D399]" />
-                <span>{t('Offline Ready', 'آفلاین آماده')}</span>
-              </>
-            ) : (
-              <>
-                <Download className="h-3.5 w-3.5 text-[#F5B942]" />
-                <span>{t('Save Offline', 'ذخیره آفلاین')}</span>
-              </>
-            )}
-          </Button>
-
-          <Button
-            variant="secondary"
-            size="sm"
-            disabled={isDownloading}
-            onClick={() => onDownload(item, true, activeQuality)}
-          >
-            <HardDriveDownload className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{t('Download to Device', 'دانلود در دستگاه')}</span>
-          </Button>
-        </div>
-      </div>
-
-      {/* Main Cinema Stage — Outer element is raw un-transformed <div> so fixed fullscreen ALWAYS fills 100dvh cleanly */}
-      <div
-        ref={stageRef}
-        data-fullscreen={isFullscreen ? 'true' : 'false'}
-        className={
-          isFullscreen
-            ? 'fixed inset-0 z-[120] w-[100dvw] h-[100dvh] bg-black flex flex-col justify-center overflow-hidden'
-            : 'relative overflow-hidden rounded-[22px] sm:rounded-[28px] border border-white/15 bg-[#06070C] shadow-[0_28px_80px_-20px_rgba(0,0,0,0.95)]'
-        }
-      >
-        <div
-          className={
-            isFullscreen
-              ? 'relative w-full h-full flex items-center justify-center bg-black'
-              : 'relative aspect-video w-full bg-black'
-          }
+    <div className="max-w-5xl mx-auto space-y-7 pb-16">
+      {/* Top Bar */}
+      <header className="flex items-center justify-between gap-4 border-b border-white/10 pb-3.5">
+        <button
+          type="button"
+          onClick={onBackToBrowse}
+          className="min-h-[42px] inline-flex items-center gap-2.5 rounded-xl border border-white/12 bg-[#0A0A0F] px-4 py-2 text-sm font-bold text-[#F8FAFC] hover:border-[#F5B942] transition-colors cursor-pointer"
         >
-          {/* Synthesized High-Quality Frame Stream / Fallback */}
+          <ArrowLeft className="h-4 w-4 text-[#F5B942]" />
+          <span className="truncate max-w-[260px] sm:max-w-md">{title}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          className="min-h-[42px] inline-flex items-center gap-2 rounded-xl border border-[#F5B942]/35 bg-[#0A0A0F] px-4 py-2 text-xs sm:text-sm font-bold text-[#F5B942] hover:bg-[#F5B942]/15 transition-colors cursor-pointer"
+        >
+          {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+          <span>{t('Fullscreen', 'تمام‌صفحه')}</span>
+        </button>
+      </header>
+
+      {/* Master Audio Visualizer Stage */}
+      <div
+        ref={playerContainerRef}
+        className="relative rounded-[28px] border border-[#F5B942]/35 bg-[#05060A] overflow-hidden shadow-[0_28px_90px_rgba(0,0,0,0.92)]"
+      >
+        <div className="relative aspect-video w-full bg-black overflow-hidden">
           <canvas
             ref={canvasRef}
             width={1280}
             height={720}
-            className={`h-full w-full ${isFullscreen ? 'object-contain' : 'object-cover'}`}
+            onClick={() => setIsPlaying((p) => !p)}
+            className="h-full w-full object-cover cursor-pointer"
           />
 
-          {/* Main HTML5 Video Stream with attached AI-Synced WebVTT Subtitle <track> */}
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            className={`pointer-events-none absolute inset-0 h-full w-full ${
-              isFullscreen ? 'object-contain' : 'object-cover'
-            } ${streamReady && !liveTrailerVideoActive ? 'opacity-100' : 'opacity-0'}`}
-          >
-            {vttTrackUrl && (
-              <track
-                key={`${vttTrackUrl}-${lang}`}
-                kind="subtitles"
-                src={vttTrackUrl}
-                srcLang={lang}
-                label={languageInfo.nativeName}
-                default
+          {/* Synchronized Lyrics / Transcript Overlay */}
+          <AnimatePresence>
+            {activeCue && subLang !== 'off' && (
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: 4 }}
+                className="pointer-events-none absolute bottom-28 inset-x-4 z-20 flex justify-center"
+              >
+                <div className="max-w-2xl rounded-xl bg-black/80 backdrop-blur-md border border-[#F5B942]/30 px-5 py-2.5 text-center shadow-2xl">
+                  <p className="text-sm sm:text-base font-medium text-[#F8FAFC] leading-relaxed">
+                    {subLang === 'fa' ? activeCue.fa : activeCue.en}
+                  </p>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Audio Playback Scrubber */}
+          <div className="absolute inset-x-0 bottom-0 z-30 bg-gradient-to-t from-[#05060A]/95 via-[#05060A]/75 to-transparent px-4 sm:px-6 pb-4 pt-10 space-y-3">
+            <div className="flex items-center gap-3" dir="ltr">
+              <span className="text-xs font-mono-tabular text-[#E2E8F0] min-w-[42px]">
+                {formatDuration(currentTime)}
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={effectiveDuration}
+                step={1}
+                value={Math.floor(currentTime)}
+                onChange={(e) => setCurrentTime(Number(e.target.value))}
+                className="flex-1 accent-[#F5B942] h-1.5 bg-white/20 rounded-lg cursor-pointer"
               />
-            )}
-          </video>
-
-          {/* Real External Trailer Stream Layer when in Trailer Mode and URL exists */}
-          {playbackMode === 'trailer' && details?.trailer?.previewVideoUrl && (
-            <video
-              ref={trailerVideoRef}
-              src={details.trailer.previewVideoUrl}
-              playsInline
-              autoPlay
-              onCanPlay={() => setLiveTrailerVideoActive(true)}
-              onError={() => setLiveTrailerVideoActive(false)}
-              className={`absolute inset-0 h-full w-full ${
-                isFullscreen ? 'object-contain' : 'object-cover'
-              } ${liveTrailerVideoActive ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-            >
-              {vttTrackUrl && (
-                <track
-                  key={`trailer-${vttTrackUrl}-${lang}`}
-                  kind="subtitles"
-                  src={vttTrackUrl}
-                  srcLang={lang}
-                  label={languageInfo.nativeName}
-                  default
-                />
-              )}
-            </video>
-          )}
-
-          {/* Top Left Mode Badges (Trailer / AI Sub / Offline Vault) */}
-          <div className="absolute top-3 start-3 z-20 flex flex-wrap items-center gap-2">
-            {playbackMode === 'trailer' && (
-              <div className="inline-flex items-center gap-2 rounded-full border border-[#F5B942]/55 bg-[#06070C]/85 px-3 py-1 text-xs font-semibold text-[#F5B942] backdrop-blur-md">
-                <Clapperboard className="h-3.5 w-3.5" />
-                <span>{t('Official Trailer Mode', 'حالت پخش تریلر رسمی')}</span>
-                <button
-                  type="button"
-                  onClick={() => setPlaybackMode('movie')}
-                  className="ms-1 rounded-full bg-[#F5B942] px-2 py-0.5 text-[10px] font-bold text-[#06070C] cursor-pointer"
-                >
-                  {t('Watch Full Movie', 'تماشای فیلم کامل')}
-                </button>
-              </div>
-            )}
-
-            {aiSyncedSub && (
-              <div className="inline-flex items-center gap-1.5 rounded-full border border-[#34D399]/45 bg-[#06070C]/85 px-3 py-1 text-[11px] font-medium text-[#34D399] backdrop-blur-md">
-                <Wand2 className="h-3 w-3" />
-                <span>
-                  {t('AI Synced', 'همسان‌سازی خودکار AI')} · {aiSyncedSub.confidencePct}%
-                </span>
-              </div>
-            )}
-
-            {playingFromOfflineVault && playbackMode === 'movie' && (
-              <div className="rounded-full border border-[#34D399]/40 bg-[#06070C]/85 px-3 py-1 text-[11px] font-medium text-[#34D399] backdrop-blur-md">
-                {t('Playing from In-App Offline Vault', 'در حال پخش از حافظه آفلاین داخل برنامه')}
-              </div>
-            )}
-          </div>
-
-          {/* Top Right Fullscreen Exit Button when Fullscreen is active */}
-          {isFullscreen && (
-            <button
-              type="button"
-              onClick={() => void toggleFullscreen()}
-              className="absolute top-3 end-3 z-20 min-h-[40px] inline-flex items-center gap-1.5 rounded-full border border-white/25 bg-[#06070C]/85 px-3.5 text-xs font-semibold text-white backdrop-blur-md hover:border-[#F5B942] cursor-pointer"
-            >
-              <Minimize2 className="h-4 w-4 text-[#F5B942]" />
-              <span>{t('Exit Fullscreen', 'خروج از تمام‌صفحه')}</span>
-            </button>
-          )}
-
-          {/* Subtitles Overlay */}
-          {activeSubtitle && (
-            <div className="pointer-events-none absolute bottom-20 sm:bottom-24 inset-x-4 z-10 flex justify-center">
-              <p className="max-w-3xl rounded-xl bg-[#06070C]/88 px-4 py-2 text-center text-xs sm:text-base font-medium text-[#F5F7FA] shadow-lg backdrop-blur-md border border-white/10">
-                {activeSubtitle}
-              </p>
-            </div>
-          )}
-
-          {/* Bottom Controls Bar */}
-          <div className="absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-[#06070C] via-[#06070C]/88 to-transparent px-3 sm:px-6 pt-6 sm:pt-8 pb-3 sm:pb-4 space-y-2 sm:space-y-3">
-            {/* Scrubber */}
-            <div className="space-y-1" dir="ltr">
-              <div className="relative flex items-center">
-                <input
-                  type="range"
-                  min={0}
-                  max={duration}
-                  value={currentTime}
-                  onChange={(e) => {
-                    const next = Number(e.target.value);
-                    setCurrentTime(next);
-                    if (playbackMode === 'movie') {
-                      onSaveProgress(item.id, next, duration, next >= duration);
-                    } else if (trailerVideoRef.current && liveTrailerVideoActive) {
-                      trailerVideoRef.current.currentTime = next;
-                    }
-                  }}
-                  aria-label="Seek timeline"
-                  className="aether-slider w-full"
-                />
-              </div>
-              <div className="flex items-center justify-between text-[11px] font-mono-tabular text-[#A3AEC2]">
-                <span>{formatDuration(currentTime)}</span>
-                <span>{formatDuration(duration)}</span>
-              </div>
+              <span className="text-xs font-mono-tabular text-[#94A3B8] min-w-[42px] text-right">
+                {formatDuration(effectiveDuration)}
+              </span>
             </div>
 
-            {/* Action Buttons Row */}
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1 sm:gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-white/12 bg-[#0A0A0F]/85 backdrop-blur-xl px-3.5 py-2">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setIsPlaying((p) => !p)}
-                  aria-label={isPlaying ? 'Pause' : 'Play'}
-                  className="min-h-[40px] min-w-[40px] sm:min-h-[44px] sm:min-w-[44px] inline-flex items-center justify-center rounded-full bg-[#F5B942] text-[#06070C] cursor-pointer"
+                  className="min-h-[38px] inline-flex items-center gap-2 rounded-xl bg-[#F5B942] px-4 py-1.5 text-xs sm:text-sm font-black text-[#06070C] hover:bg-[#F7C762] transition-colors cursor-pointer"
                 >
-                  {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 fill-current" />}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCurrentTime((tm) => Math.max(0, tm - 10))}
-                  aria-label="Rewind 10s"
-                  className="min-h-[40px] min-w-[40px] sm:min-h-[44px] sm:min-w-[44px] inline-flex items-center justify-center rounded-full border border-white/15 bg-white/[0.06] text-[#F5F7FA] cursor-pointer"
-                >
-                  <RotateCcw className="h-4 w-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setCurrentTime((tm) => Math.min(duration, tm + 10))}
-                  aria-label="Forward 10s"
-                  className="min-h-[40px] min-w-[40px] sm:min-h-[44px] sm:min-w-[44px] inline-flex items-center justify-center rounded-full border border-white/15 bg-white/[0.06] text-[#F5F7FA] cursor-pointer"
-                >
-                  <RotateCw className="h-4 w-4" />
+                  {isPlaying ? (
+                    <>
+                      <Pause className="h-4 w-4 fill-current" />
+                      <span>{t('Pause', 'توقف')}</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="h-4 w-4 fill-current" />
+                      <span>{t('Play', 'پخش')}</span>
+                    </>
+                  )}
                 </button>
 
                 <button
                   type="button"
                   onClick={() => setMuted((m) => !m)}
-                  aria-label={muted ? 'Unmute' : 'Mute'}
-                  className="min-h-[40px] min-w-[40px] sm:min-h-[44px] sm:min-w-[44px] inline-flex items-center justify-center rounded-full border border-white/15 bg-white/[0.06] text-[#F5F7FA] cursor-pointer"
+                  className="h-9 w-9 inline-flex items-center justify-center rounded-xl border border-white/10 bg-white/[0.04] text-[#E2E8F0] hover:text-white cursor-pointer"
                 >
-                  {muted || volume === 0 ? <VolumeX className="h-4 w-4" /> : <Volume2 className="h-4 w-4" />}
+                  {muted || volume === 0 ? (
+                    <VolumeX className="h-4 w-4 text-[#F87171]" />
+                  ) : (
+                    <Volume2 className="h-4 w-4 text-[#F5B942]" />
+                  )}
                 </button>
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.1}
-                  value={muted ? 0 : volume}
-                  onChange={(e) => {
-                    setVolume(Number(e.target.value));
-                    setMuted(false);
-                  }}
-                  aria-label="Volume"
-                  className="hidden sm:block w-20 accent-[#F5B942]"
-                />
               </div>
 
-              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                {/* Autonomous AI Subtitle Sync Trigger inside player bar */}
-                <button
-                  type="button"
-                  onClick={() => setSubtitlePanelOpen((o) => !o)}
-                  aria-label={t('AI Subtitle Sync Studio', 'تنظیمات همسان‌سازی زیرنویس')}
-                  className={`min-h-[38px] inline-flex items-center gap-1.5 rounded-full border px-2.5 sm:px-3 text-xs cursor-pointer transition-colors ${
-                    aiSyncedSub || subtitlePanelOpen
-                      ? 'border-[#34D399]/60 bg-[#34D399]/15 text-[#34D399]'
-                      : 'border-white/15 bg-white/[0.06] text-[#F5F7FA]'
-                  }`}
-                >
-                  <Wand2 className="h-3.5 w-3.5" />
-                  <span className="hidden sm:inline">{t('AI Sub Sync', 'همسان‌سازی AI')}</span>
-                </button>
-
-                {/* Subtitle Switcher */}
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() =>
-                    setSubMode((s) =>
-                      s === 'auto' ? 'fa' : s === 'fa' ? 'en' : s === 'en' ? 'off' : 'auto'
-                    )
+                    setSubLang((prev) => (prev === 'fa' ? 'en' : prev === 'en' ? 'off' : 'fa'))
                   }
-                  className="min-h-[38px] inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/[0.06] px-2.5 sm:px-3 text-xs text-[#F5F7FA] cursor-pointer"
+                  className={`min-h-[36px] inline-flex items-center gap-1.5 rounded-xl border px-3 py-1 text-xs font-bold transition-colors cursor-pointer ${
+                    subLang !== 'off'
+                      ? 'border-[#F5B942]/50 bg-[#F5B942]/15 text-[#F5B942]'
+                      : 'border-white/10 bg-white/[0.04] text-[#94A3B8]'
+                  }`}
                 >
-                  <Captions className="h-3.5 w-3.5 text-[#F5B942]" />
+                  <Subtitles className="h-3.5 w-3.5" />
                   <span>
-                    {subMode === 'off'
-                      ? t('CC Off', 'زیرنویس خاموش')
-                      : subMode === 'auto'
-                      ? `CC (${lang.toUpperCase()})`
-                      : `CC ${subMode.toUpperCase()}`}
+                    {subLang === 'fa'
+                      ? t('Lyrics FA', 'متن فارسی')
+                      : subLang === 'en'
+                        ? 'Lyrics EN'
+                        : t('Lyrics Off', 'متن خاموش')}
                   </span>
                 </button>
 
-                {/* Speed Switcher */}
                 <button
                   type="button"
-                  onClick={() =>
-                    setSpeed((sp) => (sp === 1 ? 1.25 : sp === 1.25 ? 1.5 : sp === 1.5 ? 2 : 1))
-                  }
-                  className="min-h-[38px] rounded-full border border-white/15 bg-white/[0.06] px-2.5 sm:px-3 text-xs font-mono-tabular text-[#F5F7FA] cursor-pointer"
+                  onClick={() => {
+                    const nextIdx = (cycleSpeeds.indexOf(speed) + 1) % cycleSpeeds.length;
+                    setSpeed(cycleSpeeds[nextIdx]);
+                  }}
+                  dir="ltr"
+                  className="min-h-[36px] rounded-xl border border-white/12 bg-white/[0.04] px-3 py-1 text-xs font-bold text-[#F8FAFC] font-mono-tabular hover:border-[#F5B942] cursor-pointer"
                 >
                   {speed}x
-                </button>
-
-                {/* Backend Quality Selector */}
-                <select
-                  value={activeQuality?.id || selectedQualityId}
-                  onChange={(e) => setSelectedQualityId(e.target.value)}
-                  aria-label="Backend Stream Quality"
-                  className="min-h-[38px] rounded-full border border-white/15 bg-[#0D101A] px-2.5 sm:px-3 text-base sm:text-xs text-[#F5F7FA]"
-                >
-                  {backendQualities.length > 0 ? (
-                    backendQualities.map((q) => (
-                      <option key={q.id} value={q.id}>
-                        {q.resolution} · {t(q.label)}
-                      </option>
-                    ))
-                  ) : (
-                    <>
-                      <option value="auto">Auto (ABR)</option>
-                      <option value="4k">4K HDR</option>
-                      <option value="1080p">1080p</option>
-                      <option value="720p">720p Lite</option>
-                    </>
-                  )}
-                </select>
-
-                <button
-                  type="button"
-                  onClick={() => void toggleFullscreen()}
-                  aria-label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
-                  className="min-h-[40px] min-w-[40px] sm:min-h-[44px] sm:min-w-[44px] inline-flex items-center justify-center rounded-full border border-white/15 bg-white/[0.06] text-[#F5F7FA] hover:border-[#F5B942] cursor-pointer"
-                >
-                  {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
                 </button>
               </div>
             </div>
@@ -1022,243 +369,88 @@ export function CinematicPlayerScreen({
         </div>
       </div>
 
-      {/* Autonomous AI Subtitle Matching & Calibration Panel (Always accessible + Expandable) */}
-      <AnimatePresence>
-        {(subtitlePanelOpen || aiSyncedSub) && (
-          <motion.div
-            initial={{ opacity: 0, y: -12 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.2 }}
-            className="rounded-[24px] border border-[#34D399]/35 bg-[#0D101A] p-4 sm:p-5 space-y-3"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <Wand2 className="h-5 w-5 text-[#34D399] shrink-0" />
-                <div>
-                  <h3 className="text-sm font-semibold text-[#F5F7FA]">
-                    {t(
-                      'Autonomous Internal AI Subtitle Matcher & Sync',
-                      'موتور هوش مصنوعی داخلی همسان‌سازی و تطبیق زیرنویس'
-                    )}
-                  </h3>
-                  <p className="text-[11px] text-[#A3AEC2]">
-                    {t(
-                      'Matches and synchronizes the exact SRT/WebVTT subtitle track specifically to this film file locally without external AI APIs.',
-                      'به‌صورت خودکار و بدون وابستگی خارجی، فایل زیرنویس دقیق مخصوص همین نسخه فیلم را تولید، همسان‌سازی و متصل می‌کند.'
-                    )}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={handleRunAiSubtitleSync} disabled={aiSyncing}>
-                  {aiSyncing ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Sparkles className="h-3.5 w-3.5" />
-                  )}
-                  <span>
-                    {aiSyncing
-                      ? t('Analyzing File Cadence...', 'در حال تحلیل و همسان‌سازی...')
-                      : aiSyncedSub
-                      ? t('Re-Sync with AI', 'همسان‌سازی مجدد AI')
-                      : t('Match & Attach Subtitle Now', 'همسان‌سازی و اتصال خودکار زیرنویس')}
-                  </span>
-                </Button>
-
-                <Button size="sm" variant="secondary" onClick={handleDownloadMatchedSrt}>
-                  <FileText className="h-3.5 w-3.5 text-[#F5B942]" />
-                  <span>{t('Download .SRT', 'دانلود فایل زیرنویس (.srt)')}</span>
-                </Button>
-              </div>
-            </div>
-
-            {aiSyncedSub && (
-              <div className="grid grid-cols-1 md:grid-cols-12 gap-3 border-t border-white/10 pt-3 text-xs">
-                <div className="md:col-span-5 rounded-xl border border-white/10 bg-[#06070C]/75 p-3 space-y-1">
-                  <p className="text-[10px] text-[#8E9BB3]">
-                    {t('Matched Film Subtitle File', 'فایل زیرنویس متصل‌شده مخصوص همین فیلم')}
-                  </p>
-                  <p dir="ltr" className="font-mono-tabular text-[#34D399] truncate font-medium">
-                    {aiSyncedSub.matchedFilename}
-                  </p>
-                  <p className="text-[11px] text-[#A3AEC2]">
-                    {aiSyncedSub.detectedFps} · {aiSyncedSub.cues.length} {t('synced cues', 'خط زیرنویس')}
-                  </p>
-                </div>
-
-                <div className="md:col-span-3 rounded-xl border border-white/10 bg-[#06070C]/75 p-3 space-y-1">
-                  <p className="text-[10px] text-[#8E9BB3]">
-                    {t('Sync Precision', 'دقت تطبیق با تصویر')}
-                  </p>
-                  <p dir="ltr" className="text-base font-bold text-[#F5B942] font-mono-tabular">
-                    {aiSyncedSub.confidencePct}%
-                  </p>
-                  <p className="text-[11px] text-[#34D399]">
-                    {t('WebVTT Track Attached', 'ترک زیرنویس متصل شد')}
-                  </p>
-                </div>
-
-                <div className="md:col-span-4 rounded-xl border border-white/10 bg-[#06070C]/75 p-3 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-[#8E9BB3]">
-                      {t('Time Calibration Offset', 'کالیبراسیون زمان (میلی‌ثانیه)')}
-                    </span>
-                    <span dir="ltr" className="font-mono-tabular font-semibold text-[#F5F7FA]">
-                      {syncOffsetMs > 0 ? `+${syncOffsetMs}` : syncOffsetMs} ms
-                    </span>
-                  </div>
-                  <div className="flex items-center gap-1.5" dir="ltr">
-                    <button
-                      type="button"
-                      onClick={() => setSyncOffsetMs((v) => v - 100)}
-                      className="flex-1 min-h-[30px] rounded-lg border border-white/15 bg-white/[0.05] text-[11px] text-white hover:border-[#F5B942] cursor-pointer"
-                    >
-                      -100ms
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSyncOffsetMs(aiSyncedSub.autoOffsetMs)}
-                      className="flex-1 min-h-[30px] rounded-lg border border-[#34D399]/40 bg-[#34D399]/10 text-[11px] text-[#34D399] cursor-pointer"
-                    >
-                      AI Auto
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setSyncOffsetMs((v) => v + 100)}
-                      className="flex-1 min-h-[30px] rounded-lg border border-white/15 bg-white/[0.05] text-[11px] text-white hover:border-[#F5B942] cursor-pointer"
-                    >
-                      +100ms
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Animated IMDb Info, Chapters & Backend Qualities Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
-        <motion.div
-          key={`${item.id}-info-card`}
-          {...getMotionProps(1)}
-          className="lg:col-span-7 rounded-[24px] border border-white/10 bg-[#0D101A] p-4 sm:p-5 space-y-3.5"
-        >
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h1 className="text-lg sm:text-xl font-bold text-[#F5F7FA]">{title}</h1>
-            {details?.imdb ? (
-              <a
-                href={details.imdb.imdbUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-full bg-[#F5B942] px-3 py-1 text-xs font-bold text-[#06070C]"
-              >
-                <span>IMDb</span>
-                <Star className="h-3 w-3 fill-current" />
-                <span dir="ltr">{details.imdb.imdbRating}</span>
-                <ExternalLink className="h-3 w-3" />
-              </a>
-            ) : (
-              <span className="text-xs text-[#A3AEC2]">
-                {category} · {item.quality}
-              </span>
-            )}
-          </div>
-
-          <p className="text-sm text-[#D2DAE8] leading-relaxed">{synopsis}</p>
-
-          {details?.imdb && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-[#A3AEC2] border-t border-white/10 pt-3">
-              <p>
-                {t('Director:', 'کارگردان:')} <span className="text-[#F5F7FA]">{t(details.imdb.director)}</span>
-              </p>
-              <p>
-                {t('Cast:', 'بازیگران:')} <span className="text-[#F5F7FA]">{details.imdb.cast.map((c) => t(c)).join(' · ')}</span>
-              </p>
-              <p>
-                {t('Country:', 'کشور:')} <span className="text-[#F5F7FA]">{t(details.imdb.country)}</span>
-              </p>
-              <p>
-                {t('Type:', 'نوع:')} <span className="text-[#F5F7FA]">{t(details.imdb.typeLabel)}</span>
-              </p>
-            </div>
-          )}
-
-          {item.chapters.length > 0 && playbackMode === 'movie' && (
-            <div className="flex flex-wrap gap-2 pt-1">
-              {item.chapters.map((ch) => (
-                <button
-                  key={ch.id}
-                  type="button"
-                  onClick={() => setCurrentTime(ch.timeSec)}
-                  className="min-h-[36px] rounded-full border border-white/10 bg-[#151A28] px-3 text-xs text-[#F5F7FA] hover:border-[#F5B942]/50 cursor-pointer"
+      {/* Audio Track Metadata & Actions */}
+      <section className="rounded-[28px] border border-[#F5B942]/30 bg-gradient-to-b from-[#0E111B] to-[#090B12] p-6 sm:p-8 shadow-[0_20px_60px_rgba(0,0,0,0.75)] space-y-5">
+        <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 border-b border-white/10 pb-5">
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2.5">
+              <h1 className="text-2xl sm:text-3xl font-black text-[#F8FAFC]">{title}</h1>
+              {item.bpm && (
+                <span
+                  dir="ltr"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#00F0FF]/15 border border-[#00F0FF]/40 px-3 py-1 text-xs font-black text-[#00F0FF] font-mono-tabular"
                 >
-                  <span dir="ltr" className="font-mono-tabular text-[#F5B942] me-1.5">
-                    {formatDuration(ch.timeSec)}
-                  </span>
-                  {t(ch.labelEn, ch.labelFa)}
-                </button>
-              ))}
-            </div>
-          )}
-        </motion.div>
-
-        <motion.div
-          key={`${item.id}-qualities-card`}
-          {...getMotionProps(2)}
-          className="lg:col-span-5 rounded-[24px] border border-white/10 bg-[#0D101A] p-4 sm:p-5 space-y-3"
-        >
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-[#F5F7FA] flex items-center gap-2">
-              <Cpu className="h-4 w-4 text-[#38BDF8]" />
-              <span>{t('Backend Stream Qualities', 'لیست کیفیت‌های دریافتی از بک‌اند')}</span>
-            </h2>
-            {isDownloaded && downloadRecord && (
-              <span dir="ltr" className="text-[11px] font-mono-tabular text-[#34D399]">
-                {formatBytes(downloadRecord.fileSizeBytes)}
-              </span>
-            )}
-          </div>
-
-          <div className="space-y-1.5">
-            {backendQualities.map((q) => {
-              const active = q.id === activeQuality?.id;
-              return (
-                <button
-                  key={q.id}
-                  type="button"
-                  onClick={() => setSelectedQualityId(q.id)}
-                  className={`w-full flex items-center justify-between gap-2 rounded-xl border px-3 py-2 text-start text-xs transition-colors cursor-pointer ${
-                    active
-                      ? 'border-[#F5B942] bg-[#F5B942]/12 text-[#F5F7FA]'
-                      : 'border-white/10 bg-[#06070C]/65 text-[#A3AEC2] hover:text-white'
-                  }`}
-                >
-                  <span className="truncate font-medium">
-                    <strong className="font-mono-tabular text-[#F5B942] me-1.5">{q.resolution}</strong>
-                    {t(q.label)}
-                  </span>
-                  <span dir="ltr" className="shrink-0 font-mono-tabular text-[11px]">
-                    {q.bitrateMbps} Mbps
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <p className="text-[11px] text-[#8E9BB3] pt-1 flex items-center gap-1.5">
-            <Sparkles className="h-3.5 w-3.5 text-[#F5B942] shrink-0" />
-            <span>
-              {t(
-                'Shortcuts: Space (Play/Pause) · J/L (±10s) · M (Mute) · F (Fullscreen)',
-                'کلیدهای میانبر: Space (پخش/توقف) · J/L (±۱۰ ثانیه) · M (صدا) · F (تمام‌صفحه)'
+                  <Radio className="h-3.5 w-3.5" />
+                  {item.bpm} BPM {item.musicalKey ? `· ${item.musicalKey}` : ''}
+                </span>
               )}
-            </span>
-          </p>
-        </motion.div>
-      </div>
+            </div>
+
+            <p className="text-xs sm:text-sm text-[#94A3B8]">
+              {category} ·{' '}
+              <span dir="ltr" className="font-mono-tabular text-[#F5B942]">
+                {item.audioSpec || 'Lossless 24-Bit / 192kHz'}
+              </span>
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {onOpenInDj && (
+              <button
+                type="button"
+                onClick={() => onOpenInDj(item, 'dj_console')}
+                className="min-h-[44px] inline-flex items-center gap-2 rounded-xl border border-[#00F0FF]/45 bg-[#00F0FF]/12 px-4 py-2 text-xs sm:text-sm font-bold text-[#00F0FF] hover:bg-[#00F0FF]/20 transition-colors cursor-pointer"
+              >
+                <Disc3 className="h-4 w-4" />
+                <span>{t('Open in 3D Sonic Rooms', 'ورود به اتاق‌های صوتی ۳بعدی')}</span>
+              </button>
+            )}
+
+            {onDownloadItem && (
+              <button
+                type="button"
+                onClick={() => onDownloadItem(item, true)}
+                className={`min-h-[44px] inline-flex items-center gap-2 rounded-xl px-5 py-2 text-xs sm:text-sm font-black transition-all cursor-pointer ${
+                  isDownloaded
+                    ? 'border border-[#10B981]/50 bg-[#10B981]/15 text-[#34D399]'
+                    : 'bg-gradient-to-r from-[#F5B942] to-[#C98A1C] text-[#06070C]'
+                }`}
+              >
+                {isDownloaded ? <Check className="h-4 w-4" /> : <Download className="h-4 w-4" />}
+                <span>
+                  {isDownloaded
+                    ? t(
+                        `Saved Offline (${downloadRecord ? formatBytes(downloadRecord.fileSizeBytes) : 'Ready'})`,
+                        'ذخیره‌شده در آرشیو آفلاین'
+                      )
+                    : t('Download Offline Audio', 'دانلود فایل صوتی آفلاین')}
+                </span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        <p className="text-sm sm:text-base text-[#E2E8F0] leading-relaxed">{synopsis}</p>
+
+        {/* Cue Points / Audio Chapters */}
+        {item.chapters.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {item.chapters.map((ch) => (
+              <button
+                key={ch.id}
+                type="button"
+                onClick={() => setCurrentTime(ch.timeSec)}
+                className="min-h-[36px] rounded-xl border border-white/10 bg-[#121624] px-3.5 py-1.5 text-xs text-[#F8FAFC] hover:border-[#F5B942]/60 transition-colors cursor-pointer"
+              >
+                <span dir="ltr" className="font-mono-tabular text-[#F5B942] me-1.5">
+                  {formatDuration(ch.timeSec)}
+                </span>
+                {t(ch.labelEn, ch.labelFa)}
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

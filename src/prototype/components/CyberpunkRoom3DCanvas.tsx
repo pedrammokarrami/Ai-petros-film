@@ -500,8 +500,7 @@ function createGlobeOrbitalBandTexture(maxAnisotropy: number): THREE.CanvasTextu
 }
 
 /**
- * Sleek Minimalist Delos Glass Holographic Diagnostic HUD Panel Texture on Pedestals
- * (Matches the dark smoked-glass diagnostic screens in front of the stasis chambers in image_f66af8e2.jpeg)
+ * Floating 3D Sonic Audio Terminal Texture (Music, Podcast & Audiobook)
  */
 function createDelosDiagnosticHudTexture(
   node: CyberRoomNode,
@@ -510,131 +509,80 @@ function createDelosDiagnosticHudTexture(
 ): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 640;
-  canvas.height = 380;
+  canvas.height = 420;
   const ctx = canvas.getContext('2d')!;
 
   const drawHud = (img?: HTMLImageElement) => {
-    ctx.clearRect(0, 0, 640, 380);
+    ctx.clearRect(0, 0, 640, 420);
 
-    const r = 24;
-    ctx.save();
+    ctx.fillStyle = isSelected ? 'rgba(14, 18, 28, 0.94)' : 'rgba(8, 12, 20, 0.88)';
     ctx.beginPath();
-    ctx.roundRect(8, 8, 624, 364, r);
-    ctx.clip();
-
-    // Smoked clinical glass background
-    const bgGrad = ctx.createLinearGradient(0, 0, 640, 380);
-    bgGrad.addColorStop(0, 'rgba(14, 22, 30, 0.86)');
-    bgGrad.addColorStop(0.5, 'rgba(9, 14, 20, 0.90)');
-    bgGrad.addColorStop(1, 'rgba(12, 19, 27, 0.88)');
-    ctx.fillStyle = bgGrad;
-    ctx.fillRect(8, 8, 624, 364);
-
-    // Top Delos Diagnostic Header
-    ctx.fillStyle = isSelected ? '#F5B942' : '#52FFD8';
-    ctx.beginPath();
-    ctx.arc(34, 34, 5, 0, Math.PI * 2);
+    ctx.roundRect(10, 10, 620, 400, 18);
     ctx.fill();
 
-    ctx.fillStyle = '#CBD5E1';
-    ctx.font = 'bold 15px "Courier Prime", monospace';
-    ctx.fillText(`DELOS // STASIS DIAGNOSTIC · ${node.id.toUpperCase()}`, 48, 39);
-
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.12)';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(24, 54);
-    ctx.lineTo(616, 54);
-    ctx.stroke();
-
-    // Left Half (x = 26..336): Film Poster Preview + Title
     if (img && img.complete && img.naturalWidth > 0) {
       ctx.save();
+      ctx.globalAlpha = 0.72;
       ctx.beginPath();
-      ctx.roundRect(26, 68, 304, 196, 14);
+      ctx.roundRect(10, 10, 620, 400, 18);
       ctx.clip();
-      ctx.drawImage(img, 26, 68, 304, 196);
+      ctx.drawImage(img, 10, 10, 620, 400);
       ctx.restore();
-    } else {
-      ctx.fillStyle = '#111b27';
-      ctx.beginPath();
-      ctx.roundRect(26, 68, 304, 196, 14);
-      ctx.fill();
     }
 
-    ctx.strokeStyle = 'rgba(82, 255, 216, 0.35)';
-    ctx.lineWidth = 1.5;
+    const grad = ctx.createLinearGradient(0, 10, 0, 410);
+    grad.addColorStop(0, 'rgba(6, 7, 12, 0.35)');
+    grad.addColorStop(0.55, 'rgba(6, 7, 12, 0.78)');
+    grad.addColorStop(1, 'rgba(6, 7, 12, 0.96)');
+    ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.roundRect(26, 68, 304, 196, 14);
-    ctx.stroke();
-
-    // Right Half (x = 352..608): Vertical Cyan-Green Bar Charts & Diagnostic Sine Waveform
-    // (Matches the exact bar chart + waveform layout on the HUD screens in image_f66af8e2.jpeg!)
-    const bars = [42, 68, 54, 86, 62, 94, 76, 58, 88, 72, 64, 82, 50];
-    bars.forEach((bh, idx) => {
-      const bx = 356 + idx * 19;
-      const by = 178 - bh;
-      ctx.fillStyle = idx % 4 === 0 ? '#F5B942' : '#52FFD8';
-      ctx.fillRect(bx, by, 11, bh);
-    });
-
-    // Diagnostic Sine Wave Line below the bar chart
-    ctx.strokeStyle = '#52FFD8';
-    ctx.lineWidth = 2.2;
-    ctx.beginPath();
-    const wavePts = [
-      [356, 232],
-      [392, 208],
-      [428, 240],
-      [468, 204],
-      [508, 238],
-      [548, 212],
-      [596, 230]
-    ];
-    wavePts.forEach(([wx, wy], i) => {
-      if (i === 0) ctx.moveTo(wx, wy);
-      else ctx.lineTo(wx, wy);
-    });
-    ctx.stroke();
-
-    // Small diagnostic pill buttons at bottom-right of HUD
-    ctx.fillStyle = 'rgba(82, 255, 216, 0.14)';
-    ctx.beginPath();
-    ctx.roundRect(356, 266, 116, 30, 8);
+    ctx.roundRect(10, 10, 620, 400, 18);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(82, 255, 216, 0.45)';
-    ctx.stroke();
-    ctx.fillStyle = '#52FFD8';
-    ctx.font = 'bold 13px "Courier Prime", monospace';
-    ctx.fillText(`SYNC ${node.score}%`, 374, 286);
 
-    ctx.fillStyle = 'rgba(245, 185, 66, 0.16)';
+    ctx.fillStyle = 'rgba(10, 12, 20, 0.88)';
     ctx.beginPath();
-    ctx.roundRect(484, 266, 116, 30, 8);
+    ctx.roundRect(28, 26, 170, 40, 12);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(245, 185, 66, 0.5)';
+    ctx.strokeStyle = '#F5B942';
+    ctx.lineWidth = 2;
     ctx.stroke();
+
     ctx.fillStyle = '#F5B942';
-    ctx.fillText(node.item.quality, 506, 286);
+    ctx.font = 'bold 17px "Courier Prime", monospace';
+    ctx.fillText(`♪ ${node.score}% SONIC`, 44, 52);
 
-    // Bottom Left: Film Title in Cinema Typography
+    const bpmText = `${node.item.bpm || 120} BPM · ${node.item.musicalKey || 'Am'}`;
+    ctx.fillStyle = 'rgba(0, 240, 255, 0.16)';
+    ctx.beginPath();
+    ctx.roundRect(410, 26, 196, 40, 12);
+    ctx.fill();
+    ctx.strokeStyle = '#00F0FF';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.fillStyle = '#00F0FF';
+    ctx.font = 'bold 16px "Courier Prime", monospace';
+    ctx.fillText(bpmText.slice(0, 16), 426, 52);
+
+    ctx.fillStyle = '#F5B942';
+    ctx.font = 'bold 16px sans-serif';
+    ctx.fillText(node.item.categoryFa.slice(0, 32), 32, 295);
+
     ctx.fillStyle = '#F8FAFC';
-    ctx.font = 'bold 22px "Lalezar", "Changa", "Cinzel", sans-serif';
-    ctx.fillText(node.item.titleFa.slice(0, 26), 28, 314);
+    ctx.font = 'bold 26px sans-serif';
+    ctx.fillText(node.item.titleFa.slice(0, 28), 32, 336);
 
     ctx.fillStyle = '#94A3B8';
-    ctx.font = '600 15px "Cinzel", "Montserrat", serif';
-    ctx.fillText(node.item.titleEn.slice(0, 34), 28, 342);
+    ctx.font = '600 16px sans-serif';
+    ctx.fillText(
+      (node.item.creatorFa || node.item.audioSpec || 'Lossless 24-Bit Spatial Audio').slice(0, 36),
+      32,
+      372
+    );
 
-    ctx.restore();
-
-    // Outer glass rim
-    ctx.strokeStyle = isSelected
-      ? 'rgba(245, 185, 66, 0.85)'
-      : 'rgba(148, 163, 184, 0.42)';
-    ctx.lineWidth = isSelected ? 3.5 : 2;
+    ctx.strokeStyle = isSelected ? '#F5B942' : 'rgba(0, 240, 255, 0.55)';
+    ctx.lineWidth = isSelected ? 5 : 2.5;
     ctx.beginPath();
-    ctx.roundRect(8, 8, 624, 364, r);
+    ctx.roundRect(10, 10, 620, 400, 18);
     ctx.stroke();
   };
 
@@ -1425,7 +1373,7 @@ export function CyberpunkRoom3DCanvas({
         lecternMesh.rotation.x = 0.34;
         termGroup.add(lecternMesh);
 
-        // 3. Sleek Minimalist Glass Holographic Diagnostic HUD Panel floating above Pedestal
+        // 3. Floating Holographic Sonic Audio Terminal above Pedestal
         const cacheKey = `${node.id}-${isSelected ? 'sel' : 'norm'}`;
         let hudTex = hudTextureCache.get(cacheKey);
         if (!hudTex) {
@@ -1433,21 +1381,21 @@ export function CyberpunkRoom3DCanvas({
           hudTextureCache.set(cacheKey, hudTex);
         }
 
-        const hudGeo = new THREE.PlaneGeometry(2.28, 1.36);
+        const hudGeo = new THREE.PlaneGeometry(2.15, 1.42);
         const hudMat = new THREE.MeshBasicMaterial({
           map: hudTex,
           transparent: true,
-          opacity: 0.95,
+          opacity: 0.96,
           side: THREE.DoubleSide
         });
         disposableGeometries.push(hudGeo);
         disposableMaterials.push(hudMat);
         const hudMesh = new THREE.Mesh(hudGeo, hudMat);
-        hudMesh.position.set(0, 2.18, 0.06);
+        hudMesh.position.set(0, 2.15, 0.08);
         termGroup.add(hudMesh);
 
         // Click proxy
-        const hitGeo = new THREE.BoxGeometry(2.5, 3.2, 1.4);
+        const hitGeo = new THREE.BoxGeometry(2.3, 3.2, 1.4);
         const hitMat = new THREE.MeshBasicMaterial({ visible: false });
         disposableGeometries.push(hitGeo);
         disposableMaterials.push(hitMat);
@@ -1462,18 +1410,6 @@ export function CyberpunkRoom3DCanvas({
           group: termGroup,
           floorTrenchPort: new THREE.Vector3(node.position.x, 0.025, node.position.z)
         });
-
-        // Straight Glowing Amber/Cyan Floor Trench Line from Selected Pedestal to the Central Globe Pedestal
-        // (Just like the glowing amber segmented floor track in image_f66af8e2.jpeg!)
-        if (isSelected || idx % 4 === 0) {
-          createFlushFloorCircuitConnection(
-            new THREE.Vector3(0, 0.025, 0),
-            new THREE.Vector3(node.position.x, 0.025, node.position.z),
-            '#F5B942',
-            isSelected ? 3 : 2,
-            idx + 300
-          );
-        }
       });
 
       // Route all connections flush along the floor trenches

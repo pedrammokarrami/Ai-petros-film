@@ -1,5 +1,13 @@
 export type LanguageCode = string;
 
+export type MediaDomainType = 'music' | 'podcast' | 'audiobook' | 'cinema';
+
+export type UniverseRealmFilter = 'all_audio' | 'music' | 'podcast' | 'audiobook' | 'cinema' | 'all';
+
+export type VenueRoomId = 'cafe' | 'concert' | 'party' | 'library' | 'podcast';
+
+export type ClubSubPreset = 'cyber_club' | 'neon_disco' | 'laser_arena';
+
 export type PrototypeRoute =
   | 'splash'
   | 'welcome'
@@ -7,6 +15,7 @@ export type PrototypeRoute =
   | 'onboarding'
   | 'universe'
   | 'discover'
+  | 'dj'
   | 'search'
   | 'library'
   | 'settings'
@@ -54,7 +63,7 @@ export type UiSimulationState =
 
 export interface TasteVector6D {
   tension: number; // 0..1
-  pace: number; // 0..1 (slow hypnotic -> fast kinetic)
+  pace: number; // 0..1 (slow hypnotic -> fast kinetic / high BPM)
   surrealism: number; // 0..1
   nocturnal: number; // 0..1
   intimacy: number; // 0..1
@@ -77,6 +86,12 @@ export interface ChapterMarker {
 
 export interface PrototypeMediaItem {
   id: string;
+  mediaType?: MediaDomainType;
+  bpm?: number;
+  musicalKey?: string;
+  audioSpec?: string;
+  narratorFa?: string;
+  narratorEn?: string;
   titleFa: string;
   titleEn: string;
   creatorFa?: string;
@@ -101,6 +116,9 @@ export interface PrototypeMediaItem {
   licenseVerified: boolean;
   consentVerified: boolean;
   sourceName: string;
+  audioUrl?: string;
+  addedByDeviceName?: string;
+  addedVia?: 'bluetooth' | 'wifi' | 'local';
   subtitles: SubtitleLine[];
   chapters: ChapterMarker[];
   spatialPos: { x: number; y: number; z: number };
@@ -117,6 +135,12 @@ export interface WatchProgressEntry {
 export interface UserCollection {
   id: string;
   name: string;
+  descriptionFa?: string;
+  descriptionEn?: string;
+  accentHex?: string;
+  moodTagFa?: string;
+  moodTagEn?: string;
+  isSmartGenerated?: boolean;
   itemIds: string[];
   createdAt: string;
 }
@@ -158,6 +182,7 @@ export interface UserAccountState {
 
 export interface SearchFilterState {
   query: string;
+  mediaDomain?: UniverseRealmFilter;
   mode: 'all' | 'similar' | 'different';
   excludeTags: string[];
   maxDurationMin: number | null;
@@ -183,3 +208,21 @@ export interface GroupedSearchResults {
   suggestedRelaxationsFa: string[];
   suggestedRelaxationsEn: string[];
 }
+
+export type UiLang = LanguageCode;
+export type TasteVector = TasteVector6D;
+export type DownloadRecord = OfflineDownloadRecord;
+export type PlaybackProgress = WatchProgressEntry;
+export type SubtitleCue = SubtitleLine;
+export type SubtitleLang = 'fa' | 'en' | 'off';
+export type SystemSimulateState = UiSimulationState;
+
+export interface ToastMessage {
+  id?: string;
+  text: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  undoLabel?: string;
+  onUndo?: () => void;
+}
+

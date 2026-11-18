@@ -1,25 +1,31 @@
 {
   "id": "/",
-  "name": "AETHER 18+ • Luxury Adult Cinema & Global 100 AI",
-  "short_name": "AETHER 18+",
-  "description": "Zero-account 18+ luxury adult streaming platform powered by 5D AI taste curation and the Global Top-100 source intelligence index.",
+  "name": "aipetros-sound",
+  "short_name": "aipetros",
+  "description": "3D Spatial Audio Rooms, Real-Time Multi-Device Sync, Cassette Studio & Offline Graphic Pack.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "background_color": "#050305",
-  "theme_color": "#050305",
+  "background_color": "#05060B",
+  "theme_color": "#05060B",
   "icons": [
     {
-      "src": "/icon.svg",
-      "sizes": "192x192 512x512",
-      "type": "image/svg+xml",
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icon.svg",
+      "src": "/pwa-512x512.png",
       "sizes": "512x512",
-      "type": "image/svg+xml",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "maskable"
     }
   ]

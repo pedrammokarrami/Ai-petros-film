@@ -2,5 +2,5 @@
   "name": "AETHER — Private Noir Cinema Discovery",
   "description": "Ultra-minimal, visual-first private noir cinema discovery powered by local semantic ranking and device-only taste profiling.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

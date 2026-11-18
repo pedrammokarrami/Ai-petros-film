@@ -1,6 +1,8 @@
 import type { ImdbFilmMetadata } from './filmDetailsClient';
 import type { PrototypeMediaItem } from './types';
 
+export type AiSubtitleLanguageCode = 'fa' | 'en' | 'ar' | string;
+
 export interface SyncedSubtitleCue {
   id: string;
   startSec: number;
@@ -16,8 +18,11 @@ export interface AiSubtitleSyncResult {
   detectedFps: string;
   autoOffsetMs: number;
   matchedAt: string;
+  languageNative?: string;
   cues: SyncedSubtitleCue[];
 }
+
+export type AiSyncedSubtitleResult = AiSubtitleSyncResult;
 
 function formatTimestamp(sec: number, separator: ',' | '.'): string {
   const safe = Math.max(0, sec);
@@ -31,34 +36,35 @@ function formatTimestamp(sec: number, separator: ',' | '.'): string {
   ).padStart(2, '0')}${separator}${String(ms).padStart(3, '0')}`;
 }
 
-/**
- * Computes a deterministic file-specific cadence fingerprint and matches
- * timing cues directly against the film's exact runtime, IMDb metadata,
- * chapters, and acoustic tempo vector — zero external AI API dependencies.
- */
 export function generateAiSyncedSubtitles(
   item: PrototypeMediaItem,
-  imdb: ImdbFilmMetadata | null,
-  resolutionLabel: string,
-  langCode: string
+  imdbOrLang?: ImdbFilmMetadata | string | null,
+  resolutionOrDuration?: string | number,
+  langCode = 'fa'
 ): AiSubtitleSyncResult {
+  const imdb =
+    typeof imdbOrLang === 'object' && imdbOrLang !== null ? imdbOrLang : null;
+  const resolvedLang =
+    typeof imdbOrLang === 'string' ? imdbOrLang : langCode;
+  const resolutionLabel =
+    typeof resolutionOrDuration === 'string' ? resolutionOrDuration : item.quality;
+
   const cleanTitleSlug = item.titleEn
     .replace(/[^a-zA-Z0-9]+/g, '.')
     .replace(/^\.+|\.+$/g, '');
   const imdbTag = imdb?.imdbId ? `.${imdb.imdbId}` : '';
   const resTag = resolutionLabel ? `.${resolutionLabel.replace(/\s+/g, '')}` : '';
-  const matchedFilename = `${cleanTitleSlug}${imdbTag}${resTag}.AI-Synced.${langCode}.srt`;
+  const matchedFilename = `${cleanTitleSlug}${imdbTag}${resTag}.AI-Synced.${resolvedLang}.srt`;
 
   const hashSeed = item.id.split('').reduce((acc, ch) => acc * 33 + ch.charCodeAt(0), 17);
   const paceScore = item.vector?.pace ?? 0.5;
   const detectedFps = paceScore > 0.65 ? '23.976 fps (NTSC Film)' : '24.000 fps (True Cinema)';
-  const autoOffsetMs = ((hashSeed % 9) - 4) * 35; // -140ms to +140ms auto calibration
+  const autoOffsetMs = ((hashSeed % 9) - 4) * 35;
   const confidencePct = Number((98.1 + ((hashSeed % 17) / 10)).toFixed(1));
 
   const duration = Math.max(60, item.durationSec);
   const cues: SyncedSubtitleCue[] = [];
 
-  // 1. Opening slate matched to IMDb record
   cues.push({
     id: `${item.id}-ai-0`,
     startSec: 1,
@@ -71,7 +77,6 @@ export function generateAiSyncedSubtitles(
     }`
   });
 
-  // 2. Existing curated dialogue cues
   item.subtitles.forEach((s, idx) => {
     cues.push({
       id: `${item.id}-ai-base-${idx}`,
@@ -82,7 +87,6 @@ export function generateAiSyncedSubtitles(
     });
   });
 
-  // 3. Chapter-locked scene transitions & thematic cues across the full timeline
   const sortedChapters = [...item.chapters].sort((a, b) => a.timeSec - b.timeSec);
   sortedChapters.forEach((ch, idx) => {
     const start = Math.max(2, ch.timeSec);
@@ -93,12 +97,11 @@ export function generateAiSyncedSubtitles(
         startSec: start,
         endSec: end,
         en: `[Scene ${idx + 1}: ${ch.labelEn}] — ${item.synopsisEn.split('.')[0]}.`,
-        fa: `[سکانس ${idx + 1}: ${ch.labelFa}] — ${(item.synopsisFa.split('؛')[0] || item.synopsisFa)}`
+        fa: `[سکانس ${idx + 1}: ${ch.labelFa}] — ${item.synopsisFa.split('؛')[0] || item.synopsisFa}`
       });
     }
   });
 
-  // 4. Mid-film & cast/mood atmospheric cues to guarantee dense timeline coverage
   const sliceCount = 8;
   const step = duration / (sliceCount + 1);
   const castText = imdb?.cast?.slice(0, 2).join(' & ') || item.creatorEn || 'Lead Ensemble';
@@ -116,11 +119,11 @@ export function generateAiSyncedSubtitles(
         endSec: tEnd,
         en:
           i % 2 === 0
-            ? `[Ambient Audio · ${castText}] ${item.clusterLabelEn} — ${(item.synopsisEn.split('.')[0] || item.synopsisEn)}`
+            ? `[Ambient Audio · ${castText}] ${item.clusterLabelEn} — ${item.synopsisEn.split('.')[0] || item.synopsisEn}`
             : `[Visual Cue #${i}] ${item.tags.slice(0, 3).join(' · ')} — ${item.categoryEn}`,
         fa:
           i % 2 === 0
-            ? `[فضاسازی صوتی · ${castText}] ${item.clusterLabelFa} — ${(item.synopsisFa.split('؛')[0] || item.synopsisFa)}`
+            ? `[فضاسازی صوتی · ${castText}] ${item.clusterLabelFa} — ${item.synopsisFa.split('؛')[0] || item.synopsisFa}`
             : `[نشانه سکانس ${i}] ${item.categoryFa} — ${item.titleFa}`
       });
     }
@@ -135,16 +138,18 @@ export function generateAiSyncedSubtitles(
     detectedFps,
     autoOffsetMs,
     matchedAt: new Date().toISOString(),
+    languageNative: resolvedLang === 'fa' ? 'فارسی' : 'English',
     cues
   };
 }
 
 export function buildSrtContent(
-  cues: SyncedSubtitleCue[],
-  offsetMs: number,
-  renderText: (cue: SyncedSubtitleCue) => string
+  cues: Array<{ startSec: number; endSec: number; fa: string; en: string }>,
+  offsetMs = 0,
+  renderText?: (cue: { startSec: number; endSec: number; fa: string; en: string }) => string
 ): string {
   const offsetSec = offsetMs / 1000;
+  const fmt = renderText ?? ((c) => c.fa || c.en);
   return cues
     .map((cue, idx) => {
       const start = Math.max(0, cue.startSec + offsetSec);
@@ -152,17 +157,18 @@ export function buildSrtContent(
       return `${idx + 1}\n${formatTimestamp(start, ',')} --> ${formatTimestamp(
         end,
         ','
-      )}\n${renderText(cue)}\n`;
+      )}\n${fmt(cue)}\n`;
     })
     .join('\n');
 }
 
 export function buildWebVttContent(
-  cues: SyncedSubtitleCue[],
-  offsetMs: number,
-  renderText: (cue: SyncedSubtitleCue) => string
+  cues: Array<{ startSec: number; endSec: number; fa: string; en: string }>,
+  offsetMs = 0,
+  renderText?: (cue: { startSec: number; endSec: number; fa: string; en: string }) => string
 ): string {
   const offsetSec = offsetMs / 1000;
+  const fmt = renderText ?? ((c) => c.fa || c.en);
   const body = cues
     .map((cue) => {
       const start = Math.max(0, cue.startSec + offsetSec);
@@ -170,7 +176,7 @@ export function buildWebVttContent(
       return `${formatTimestamp(start, '.')} --> ${formatTimestamp(
         end,
         '.'
-      )}\n${renderText(cue)}\n`;
+      )}\n${fmt(cue)}\n`;
     })
     .join('\n');
   return `WEBVTT\n\n${body}`;

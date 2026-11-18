@@ -128,8 +128,8 @@ export function EntryFlow({
           onClick={() => onNavigate('welcome')}
           className="min-h-[44px] text-start cursor-pointer"
         >
-          <span className="font-editorial text-xl sm:text-2xl tracking-[0.18em] text-[#F5B942]">
-            AETHER UNIVERSE
+          <span className="font-editorial text-xl sm:text-2xl tracking-[0.14em] text-[#F5B942]">
+            aipetros-sound
           </span>
         </button>
         <div className="flex items-center gap-2">

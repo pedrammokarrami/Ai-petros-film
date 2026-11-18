@@ -713,3 +713,37 @@ export function executeCyberRoomChatCommand(
     focusNodeId: targetNode.id
   };
 }
+
+export type CyberRoomCameraMode = 'room_game' | 'orbit_overview';
+
+export function buildInitialCyberRoomGraph(
+  catalog: PrototypeMediaItem[],
+  userVector?: {
+    tension: number;
+    pace: number;
+    surrealism: number;
+    nocturnal: number;
+    intimacy: number;
+    depth: number;
+  },
+  _feedbackMap?: unknown
+): { nodes: CyberRoomNode[]; edges: CyberRoomEdge[] } {
+  const scored = catalog.slice(0, 12).map((item, idx) => {
+    let score = 96 - idx * 2;
+    if (userVector && item.vector) {
+      const dot =
+        userVector.tension * item.vector.tension +
+        userVector.pace * item.vector.pace +
+        userVector.surrealism * item.vector.surrealism +
+        userVector.nocturnal * item.vector.nocturnal +
+        userVector.intimacy * item.vector.intimacy +
+        userVector.depth * item.vector.depth;
+      score = Math.max(78, Math.min(99, Math.round((dot / 4.2) * 100)));
+    }
+    return { item, score };
+  });
+  const nodes = buildInitialCyberNodes(scored);
+  const edges = buildInitialCyberEdges(nodes);
+  return { nodes, edges };
+}
+

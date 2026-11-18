@@ -894,6 +894,10 @@ export function useT() {
   return useContext(I18nContext);
 }
 
+export function useAutoTranslation(_lang?: string) {
+  return useContext(I18nContext);
+}
+
 export function LanguagePickerModal({
   isOpen,
   currentLang,

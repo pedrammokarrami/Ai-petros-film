@@ -24,7 +24,7 @@ class AetherErrorBoundary extends React.Component<
     if (this.state.hasError) {
       return (
         <div className="min-h-[100dvh] w-full bg-[#070b14] text-slate-100 flex flex-col items-center justify-center p-6 text-center gap-4">
-          <p className="font-editorial text-2xl text-[#D4AF37]">AETHER</p>
+          <p className="font-editorial text-2xl text-[#D4AF37]">aipetros-sound</p>
           <button
             type="button"
             onClick={() => this.setState({ hasError: false })}
@@ -44,3 +44,11 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </AetherErrorBoundary>
 );
+
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {
+      // Non-fatal in unsupported embedded contexts
+    });
+  });
+}

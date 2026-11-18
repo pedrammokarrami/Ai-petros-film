@@ -1,19 +1,58 @@
-# AETHER 18+ (Velora) — Luxury Adult Cinema & Global 100-Source AI Discovery Platform
+# aipetros-sound — Spatial 3D Music, Podcast & Listening Rooms
 
-🌐 **Live Execution URLs for `pedrammokarrami/Velora` (لینک‌های اجرای مستقیم پروژه):**
-- **1. Instant Full-Stack Live Runner (StackBlitz):** [https://stackblitz.com/github/pedrammokarrami/Velora](https://stackblitz.com/github/pedrammokarrami/Velora)
-- **2. Instant Cloud Runner (CodeSandbox):** [https://githubbox.com/github/pedrammokarrami/Velora](https://githubbox.com/pedrammokarrami/Velora)
-- **3. GitHub Pages Live App URL:** [https://pedrammokarrami.github.io/Velora/](https://pedrammokarrami.github.io/Velora/)
-- **4. GitHub Repository:** [https://github.com/pedrammokarrami/Velora](https://github.com/pedrammokarrami/Velora)
+Production-ready React 19 + Three.js (`@react-three/fiber` / `@react-three/drei`) + Express full-stack spatial audio platform with 5 interactive 3D rooms, real-time multi-device room sync (Bluetooth / Wi-Fi pairing & simultaneous routing), and an installable offline-first PWA.
 
 ---
 
-## ✨ Key Production Capabilities
-1. **Strict 18+ Age Verification Gate & Underage Lockout (`sessionStorage`):** Compliant RTA / 18 U.S.C. 2257 entry gate with 14-language support.
-2. **Global Top-100 Content Sources & 20-Country Traffic Intelligence Engine:**
-   - Connected directly to the **AETHER AI Concierge** (`POST /api/ai/curate` powered by server-side `gemini-3.8-flash` + `<2ms` 5D Cosine Vector Engine).
-   - Matches user requests against global benchmarks (`eporner.com` #6 4K/60fps, `njavtv.com` #11 & `missav.ai` #27 Uncut Asian Cinema, `candy.ai` #44 & `myanima.ai` / `lovescape.com` #62 Generative AI, `dlsite.com` #14 & `f95zone.to` #15 Uncensored Anime & Binaural ASMR, `brazzers.com` / `adulttime.com` #40 Studio POV, `beeg.com` / `hqporner.com` #23 Curated Studio).
-3. **Zero-Unmount Pre-Cached 3D Stage & Fullscreen 4K 60FPS Player:**
-   - Instant `<0.3s` playback, AI Scene-Stitching ("Personal TV" Highlight Cut), 2x Speed Right-Thumb Hold, Left-Edge Night Dimmer, `<10ms` Holographic Panic Cloak (`Esc+Esc` or Device Shake), Semantic Heat-Wave Scrubber, 3-Panel Split-Canvas Preview, and Cross-Device 6-Character Taste DNA Vault (`/api/dna/sync`).
-4. **Installable Cross-Platform PWA:**
-   - Standalone Web App Manifest (`./manifest.json`), iOS/Android/Desktop install prompt, and `<100MB` memory footprint.
+## Quick Start
+
+```bash
+npm install
+npm run dev       # Starts full-stack Express + Vite server on port 3000
+npm run build     # Builds production client bundle into dist/
+npm start         # Runs production server (tsx / node server.ts)
+```
+
+---
+
+## 3D Graphics & Blender Handoff Guide (for `arjun988/blender-skills`)
+
+This repository is structured for direct `.glb` / PBR / lighting upgrades via **Blender + `blender-skills`**:
+
+### 1. Five Spatial 3D Rooms (`src/scenes/`)
+- **Cafe / Saloon (`cafe`)**: `src/scenes/cafe/CafeRoomScene.tsx`
+- **Underground Party (`party`)**: `src/scenes/party/PartyRoomScene.tsx`
+- **Royal Library / Audiobook (`audiobook`)**: `src/scenes/library/LibraryRoomScene.tsx`
+- **Live Concert Hall (`concert`)**: `src/scenes/concert/ConcertHallScene.tsx`
+- **Broadcast Podcast Studio (`podcast`)**: `src/scenes/podcast/PodcastRoomScene.tsx`
+- **Shared Rigged Characters, Lighting & Postprocessing**:
+  - `src/scenes/shared/SonicRoomShared.tsx` (`RiggedHumanAvatar`, `ProceduralRoomEnvironment`, `RoomCanvasFrame`, `N8AO` / `Bloom` / `ToneMapping`)
+  - `src/scenes/shared/RoomPeerAvatars.tsx` (`assignPeersToCastSlots`, `PeerOverheadBadge` — maps joined friends directly onto seated/performing cast characters)
+  - `src/scenes/shared/polyhavenTextures.ts` (PBR tileable wood, stone, metal textures)
+- **Discover Cassette Studio**:
+  - `src/prototype/components/StudioCassette3DScene.tsx` (`/models/studio/cassette-deck.glb`)
+
+### 2. Local 3D Assets (`public/`)
+- `public/models/cafe/` — Saloon character GLBs (`bartender`, `saloonLady`, `gunslinger`, `rancher`, `gambler`)
+- `public/models/concert/` — Stage performers, rigged dancers, and Mixamo-compatible mocap `.glb` clips
+- `public/models/podcast/` — Seated podcast host & co-host GLBs
+- `public/models/studio/` — `cassette-deck.glb` hero prop
+- `public/textures/polyhaven/` — Albedo, normal, and roughness maps (preloaded offline via `src/services/roomAssetPreloader.ts`)
+- `public/hdr/`, `public/hdri/` — Room environment HDRIs
+
+### 3. Recommended Blender Export Conventions
+When generating or replacing props/characters/environments with Blender (`blender-skills`):
+1. Export as Draco-compressed **`.glb`** (sRGB Color maps, Linear Normal/Roughness/Metalness ORM maps, `Y-up`, meters scale).
+2. Keep skeletal rigs Mixamo-compatible (`mixamorigHips` / `mixamorigHead` / `mixamorigSpine` / arms) or RPM (`Hips` / `Head`) so `RiggedHumanAvatar` & `buildHumanActivityClip` bind seamlessly.
+3. Preserve ground/chair pivot discipline (`minY = 0` for standing props/characters; chair surface height documented for seated characters).
+4. After replacing or adding assets under `public/models/` or `src/scenes/`, run:
+   ```bash
+   npx tsc --noEmit
+   npm run build
+   ```
+
+---
+
+## Deployment Notes (`vercel.json` & Standalone Server)
+- Preconfigured for Vercel (`vercel.json` + serverless handler `api/index.ts`) and Express standalone (`server.ts` with HSTS / HTTPS `.dev` readiness).
+- Set optional environment variables in `.env` (see `.env.example`).
